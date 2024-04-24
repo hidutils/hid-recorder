@@ -15,7 +15,7 @@ use hidreport::hid::{
     ReportDescriptorItems,
 };
 use hidreport::hut;
-use hidreport::{Field, Report, ReportDescriptor, UsagePage};
+use hidreport::{Field, Report, ReportDescriptor, UsagePage, Usage, UsageId};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -429,25 +429,31 @@ fn parse_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Instant) ->
                 println!("{:20}: {:5} |", hutstr, i32::from(v));
             }
             Field::Array(arr) => {
-                let usages = arr.usages();
+                let usage_range = arr.usage_range();
 
-                // Usages is a vec that goes from min/max usage all expanded
-                // arr.values are n values each with the value matching one of those usages
-
+                // The values in the array are usage values between usage min/max
                 let vs = arr.extract_u32(bytes).unwrap();
-                usages.iter().zip(vs.iter()).for_each(|(u, v)| {
-                    // FIXME range check, value may be outside logical range
-                    let hutstr = if let Ok(hut) = hut::Usage::try_from(u) {
-                        format!("{hut}")
+                vs.iter().for_each(|v| {
+                    // Does the value have a usage page?
+                    let usage = if (v & 0xffff0000) != 0 {
+                        Usage::from(*v)
                     } else {
-                        format!(
-                            "{:04x}/{:04x}",
-                            u16::from(u.usage_page),
-                            u16::from(u.usage_id)
-                        )
+                        Usage::from_page_and_id(usage_range.minimum().usage_page(), UsageId::from(*v as u16))
                     };
-                    print!("#                ");
-                    println!("{:20}: {:5} |", hutstr, v);
+                    // Usage within range?
+                    if let Some(usage) = usage_range.lookup_usage(usage) {
+                        let hutstr = if let Ok(hut) = hut::Usage::try_from(&usage) {
+                            format!("{hut}")
+                        } else {
+                            format!(
+                                "{:04x}/{:04x}",
+                                u16::from(usage.usage_page),
+                                u16::from(usage.usage_id)
+                            )
+                        };
+                        print!("#                ");
+                        println!("{:20}: {:5} |", hutstr, v);
+                    }
                 });
             }
         }
