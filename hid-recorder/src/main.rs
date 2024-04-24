@@ -15,7 +15,7 @@ use hidreport::hid::{
     ReportDescriptorItems,
 };
 use hidreport::hut;
-use hidreport::{Field, Report, ReportDescriptor, UsagePage, Usage, UsageId};
+use hidreport::{Field, Report, ReportDescriptor, Usage, UsageId, UsagePage};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -438,7 +438,10 @@ fn parse_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Instant) ->
                     let usage = if (v & 0xffff0000) != 0 {
                         Usage::from(*v)
                     } else {
-                        Usage::from_page_and_id(usage_range.minimum().usage_page(), UsageId::from(*v as u16))
+                        Usage::from_page_and_id(
+                            usage_range.minimum().usage_page(),
+                            UsageId::from(*v as u16),
+                        )
                     };
                     // Usage within range?
                     if let Some(usage) = usage_range.lookup_usage(usage) {
