@@ -1,0 +1,3 @@
+[submodule "hidreport"]
+	path = hidreport
+	url = https://gitlab.freedesktop.org/whot/hidreport.git
