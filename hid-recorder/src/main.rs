@@ -3,8 +3,10 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use libc;
+use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
 use std::fs::OpenOptions;
 use std::io::Read;
+use std::os::fd::AsFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -484,25 +486,28 @@ fn read_events(path: &Path, rdesc: &ReportDescriptor) -> Result<()> {
         .custom_flags(libc::O_NONBLOCK)
         .open(path)?;
 
+    let timeout = PollTimeout::try_from(-1).unwrap();
     let mut now: Option<Instant> = None;
-
     let mut data = [0; 1024];
     loop {
-        match f.read(&mut data) {
-            Ok(_nbytes) => {
-                now = if now.is_none() {
-                    Some(Instant::now())
-                } else {
-                    now
-                };
-                parse_report(&data, rdesc, &now.unwrap())?;
-            }
-            Err(e) => {
-                if e.kind() != std::io::ErrorKind::WouldBlock {
-                    bail!(e);
+        let mut pollfds = [PollFd::new(f.as_fd(), PollFlags::POLLIN)];
+        if poll(&mut pollfds, timeout)? > 0 {
+            match f.read(&mut data) {
+                Ok(_nbytes) => {
+                    now = if now.is_none() {
+                        Some(Instant::now())
+                    } else {
+                        now
+                    };
+                    parse_report(&data, rdesc, &now.unwrap())?;
                 }
-            }
-        };
+                Err(e) => {
+                    if e.kind() != std::io::ErrorKind::WouldBlock {
+                        bail!(e);
+                    }
+                }
+            };
+        }
     }
 
     Ok(())
