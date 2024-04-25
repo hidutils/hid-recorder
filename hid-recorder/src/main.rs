@@ -17,7 +17,7 @@ use hidreport::hid::{
     ReportDescriptorItems,
 };
 use hidreport::hut;
-use hidreport::{Field, Report, ReportDescriptor, Usage, UsageId, UsagePage};
+use hidreport::*;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -243,7 +243,7 @@ fn print_report(r: &impl Report) {
     println!("#    Report size: {} bits", r.size_in_bits());
     for field in r.fields().iter() {
         print!(
-            "#    Bits: {:3} -> {:3} | ",
+            "#  |   Bits: {:3} -> {:3} | ",
             field.bits().start(),
             field.bits().end()
         );
@@ -405,14 +405,41 @@ fn parse_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Instant) ->
         println!("# Report ID: {id} / ");
     }
 
+    let mut current_collection: Option<&Collection> = None;
+
+    /// Check for a logical collections in the slice and compare it to the current one,
+    /// returning either the current one (if unchanged) or the new one (if changed).
+    /// If no logical collection is present, None is returned.
+    fn compare_collections<'a>(collections: &'a [Collection], current: Option<&'a Collection>) -> (bool, Option<&'a Collection>) {
+        let c = collections.iter().find(|&c| matches!(c.collection_type(), CollectionType::Logical));
+        let (changed, newc) = match c {
+            // true only on the first call
+            Some(c) if current.is_none() => { (true, Some(c)) },
+            Some(c) => {
+                if c != current.unwrap() {
+                    (true, Some(c))
+                } else {
+                    (false, current)
+                }
+            },
+            None => (false, current),
+        };
+        (changed, newc)
+    }
+
     for field in report.fields() {
         match field {
             Field::Constant(_) => {
-                print!("#                <{} bits padding>", field.bits().clone().count());
+                print!("#  |             <{} bits padding>", field.bits().clone().count());
                 let r: &std::ops::RangeInclusive<usize> = field.bits();
                 println!("");
             }
             Field::Variable(var) => {
+                let changed: bool;
+                (changed, current_collection) = compare_collections(&var.collections, current_collection);
+                if changed {
+                    println!("#  +------------------------------");
+                }
                 let v = var.extract_i32(bytes).unwrap();
                 let u = var.usage;
                 let hut = hut::Usage::try_from(&u);
@@ -425,10 +452,16 @@ fn parse_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Instant) ->
                         u16::from(u.usage_id)
                     )
                 };
-                print!("#                ");
+                print!("#  |             ");
                 println!("{:20}: {:5} |", hutstr, i32::from(v));
             }
             Field::Array(arr) => {
+                let changed: bool;
+                (changed, current_collection) = compare_collections(&arr.collections, current_collection);
+                if changed {
+                    println!("#  +------------------------------");
+                }
+
                 let usage_range = arr.usage_range();
 
                 // The values in the array are usage values between usage min/max
