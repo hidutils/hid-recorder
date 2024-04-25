@@ -249,7 +249,7 @@ fn print_report(r: &impl Report) {
         );
         match field {
             Field::Constant(_c) => {
-                print!("{:49} |", "######### Padding");
+                print!("{:60} |", "######### Padding");
             }
             Field::Variable(v) => {
                 let hutstr: String = match hut::Usage::try_from(&v.usage) {
