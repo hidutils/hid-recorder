@@ -282,22 +282,21 @@ fn print_report(r: &impl Report) {
                 }
             }
             Field::Array(a) => {
-                println!("Usages:");
+                print!("Usages:");
                 a.usages().iter().for_each(|u| {
                     let hutstr: String = match hut::Usage::try_from(u) {
                         Err(_) => "<unknown>".into(),
                         Ok(u) => format!("{} / {}", hut::UsagePage::from(&u), u),
                     };
-                    println!(
-                        "#                              {:04x}/{:04x}: {:42}",
+                    print!(
+                        "\n#                              {:04x}/{:04x}: {:43}",
                         u16::from(u.usage_page),
                         u16::from(u.usage_id),
                         hutstr
                     );
                 });
-                print!("#                              | ");
                 print!(
-                    "Logical Range: {:5}->{:5} | ",
+                    "| Logical Range: {:5}->{:5} | ",
                     i32::from(a.logical_minimum),
                     i32::from(a.logical_maximum)
                 );
