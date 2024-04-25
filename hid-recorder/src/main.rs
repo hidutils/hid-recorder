@@ -408,9 +408,8 @@ fn parse_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Instant) ->
     for field in report.fields() {
         match field {
             Field::Constant(_) => {
-                print!("#                ");
+                print!("#                <{} bits padding>", field.bits().clone().count());
                 let r: &std::ops::RangeInclusive<usize> = field.bits();
-                r.clone().for_each(|_| print!("."));
                 println!("");
             }
             Field::Variable(var) => {
