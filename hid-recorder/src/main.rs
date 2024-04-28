@@ -477,8 +477,8 @@ fn parse_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Instant) ->
                         )
                     };
                     // Usage within range?
-                    if let Some(usage) = usage_range.lookup_usage(usage) {
-                        let hutstr = if let Ok(hut) = hut::Usage::try_from(&usage) {
+                    if let Some(usage) = usage_range.lookup_usage(&usage) {
+                        let hutstr = if let Ok(hut) = hut::Usage::try_from(usage) {
                             format!("{hut}")
                         } else {
                             format!(
