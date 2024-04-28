@@ -410,18 +410,23 @@ fn parse_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Instant) ->
     /// Check for a logical collections in the slice and compare it to the current one,
     /// returning either the current one (if unchanged) or the new one (if changed).
     /// If no logical collection is present, None is returned.
-    fn compare_collections<'a>(collections: &'a [Collection], current: Option<&'a Collection>) -> (bool, Option<&'a Collection>) {
-        let c = collections.iter().find(|&c| matches!(c.collection_type(), CollectionType::Logical));
+    fn compare_collections<'a>(
+        collections: &'a [Collection],
+        current: Option<&'a Collection>,
+    ) -> (bool, Option<&'a Collection>) {
+        let c = collections
+            .iter()
+            .find(|&c| matches!(c.collection_type(), CollectionType::Logical));
         let (changed, newc) = match c {
             // true only on the first call
-            Some(c) if current.is_none() => { (true, Some(c)) },
+            Some(c) if current.is_none() => (true, Some(c)),
             Some(c) => {
                 if c != current.unwrap() {
                     (true, Some(c))
                 } else {
                     (false, current)
                 }
-            },
+            }
             None => (false, current),
         };
         (changed, newc)
@@ -430,13 +435,17 @@ fn parse_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Instant) ->
     for field in report.fields() {
         match field {
             Field::Constant(_) => {
-                print!("#  |             <{} bits padding>", field.bits().clone().count());
+                print!(
+                    "#  |             <{} bits padding>",
+                    field.bits().clone().count()
+                );
                 let r: &std::ops::RangeInclusive<usize> = field.bits();
                 println!("");
             }
             Field::Variable(var) => {
                 let changed: bool;
-                (changed, current_collection) = compare_collections(&var.collections, current_collection);
+                (changed, current_collection) =
+                    compare_collections(&var.collections, current_collection);
                 if changed {
                     println!("#  +------------------------------");
                 }
@@ -457,7 +466,8 @@ fn parse_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Instant) ->
             }
             Field::Array(arr) => {
                 let changed: bool;
-                (changed, current_collection) = compare_collections(&arr.collections, current_collection);
+                (changed, current_collection) =
+                    compare_collections(&arr.collections, current_collection);
                 if changed {
                     println!("#  +------------------------------");
                 }
