@@ -505,16 +505,15 @@ fn parse_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Instant) ->
 
     let elapsed = start_time.elapsed();
 
-    print!(
-        "E: {:06}.{:06} {} ",
+    println!(
+        "E: {:06}.{:06} {} {}",
         elapsed.as_secs(),
         elapsed.as_micros() % 1000000,
-        report.size_in_bytes()
+        report.size_in_bytes(),
+        bytes[..report.size_in_bytes()]
+            .iter()
+            .fold("".to_string(), |acc, b| format!("{acc}{b:02x} "))
     );
-    bytes[..report.size_in_bytes()]
-        .iter()
-        .for_each(|b| print!("{b:02x} "));
-    println!("");
 
     Ok(())
 }
