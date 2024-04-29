@@ -5,7 +5,7 @@ use clap::{Parser, ValueEnum};
 use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
 use owo_colors::{OwoColorize, Stream::Stdout, Style};
 use std::fs::OpenOptions;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::fd::AsFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -41,9 +41,16 @@ impl Styles {
 
 // Usage: cprintln!(Sytles::Data, <normal println args>)
 macro_rules! cprintln {
-    () => { println!(); };
-    ($style:expr, $($arg:tt)*) => {{
-        println!("{}", format!($($arg)*).if_supports_color(Stdout, |text| text.style($style.style())));
+    ($stream:ident) => { writeln!($stream).unwrap(); };
+    ($stream:ident, $style:expr, $($arg:tt)*) => {{
+        writeln!($stream, "{}", format!($($arg)*).if_supports_color(Stdout, |text| text.style($style.style()))).unwrap();
+    }};
+}
+
+macro_rules! cprint {
+    ($stream:ident) => { write!($stream).unwrap(); };
+    ($stream:ident, $style:expr, $($arg:tt)*) => {{
+        write!($stream, "{}", format!($($arg)*).if_supports_color(Stdout, |text| text.style($style.style()))).unwrap();
     }};
 }
 
@@ -63,6 +70,9 @@ struct Cli {
 
     #[arg(long, value_enum, default_value_t = ClapColorArg::Auto)]
     color: ClapColorArg,
+
+    #[arg(long, default_value_t = ("-").to_string())]
+    output_file: String,
 
     /// Path to the hidraw device node
     path: PathBuf,
@@ -212,7 +222,7 @@ fn fmt_item(item: &impl Item, usage_page: &UsagePage) -> String {
     }
 }
 
-fn parse_rdesc(bytes: &[u8]) -> Result<()> {
+fn parse_rdesc(stream: &mut impl Write, bytes: &[u8]) -> Result<()> {
     let rdesc_items = ReportDescriptorItems::try_from(bytes)?;
     let mut indent = 0;
     let mut current_usage_page = UsagePage::from(0u16); // Undefined
@@ -239,7 +249,7 @@ fn parse_rdesc(bytes: &[u8]) -> Result<()> {
             ItemType::Main(MainItem::Feature(..)) => Styles::FeatureItem,
             _ => Styles::None,
         };
-        cprintln!(style, "# {bytes:30} // {indented:40} {offset}");
+        cprintln!(stream, style, "# {bytes:30} // {indented:40} {offset}");
 
         match item.item_type() {
             ItemType::Main(MainItem::Collection(_)) => indent += 2,
@@ -280,39 +290,57 @@ fn find_sysfs_path(path: &Path) -> Result<PathBuf> {
 }
 
 /// Print the parsed reports as an outline of how they look like
-fn print_report(r: &impl Report) {
+fn print_report(stream: &mut impl Write, r: &impl Report) {
     if r.report_id().is_some() {
-        println!("# Report ID: {}", r.report_id().unwrap());
+        cprintln!(
+            stream,
+            Styles::None,
+            "# Report ID: {}",
+            r.report_id().unwrap()
+        );
     }
-    println!("#    Report size: {} bits", r.size_in_bits());
+    cprintln!(
+        stream,
+        Styles::None,
+        "#    Report size: {} bits",
+        r.size_in_bits()
+    );
     for field in r.fields().iter() {
-        print!(
+        cprint!(
+            stream,
+            Styles::None,
             "#  |   Bits: {:3} -> {:3} | ",
             field.bits().start(),
             field.bits().end()
         );
         match field {
             Field::Constant(_c) => {
-                print!("{:60} |", "######### Padding");
+                cprint!(stream, Styles::None, "{:60} |", "######### Padding");
             }
             Field::Variable(v) => {
                 let hutstr: String = match hut::Usage::try_from(&v.usage) {
                     Err(_) => "<unknown>".into(),
                     Ok(u) => format!("{} / {}", hut::UsagePage::from(&u), u),
                 };
-                print!(
+                cprint!(
+                    stream,
+                    Styles::None,
                     "Usage: {:04x}/{:04x}: {:42} | ",
                     u16::from(v.usage.usage_page),
                     u16::from(v.usage.usage_id),
                     hutstr
                 );
-                print!(
+                cprint!(
+                    stream,
+                    Styles::None,
                     "Logical Range: {:5}->{:5} | ",
                     i32::from(v.logical_minimum),
                     i32::from(v.logical_maximum)
                 );
                 if let (Some(min), Some(max)) = (v.physical_minimum, v.physical_maximum) {
-                    print!(
+                    cprint!(
+                        stream,
+                        Styles::None,
                         "Physical Range: {:5}->{:5} | ",
                         i32::from(min),
                         i32::from(max)
@@ -320,31 +348,37 @@ fn print_report(r: &impl Report) {
                 };
                 if let Some(u) = v.unit {
                     if let Some(units) = u.units() {
-                        print!("Unit: {:?}: {:?}", u.system(), units);
+                        cprint!(stream, Styles::None, "Unit: {:?}: {:?}", u.system(), units);
                     }
                 }
             }
             Field::Array(a) => {
-                print!("Usages:");
+                cprint!(stream, Styles::None, "Usages:");
                 a.usages().iter().for_each(|u| {
                     let hutstr: String = match hut::Usage::try_from(u) {
                         Err(_) => "<unknown>".into(),
                         Ok(u) => format!("{} / {}", hut::UsagePage::from(&u), u),
                     };
-                    print!(
+                    cprint!(
+                        stream,
+                        Styles::None,
                         "\n#                              {:04x}/{:04x}: {:43}",
                         u16::from(u.usage_page),
                         u16::from(u.usage_id),
                         hutstr
                     );
                 });
-                print!(
+                cprint!(
+                    stream,
+                    Styles::None,
                     "| Logical Range: {:5}->{:5} | ",
                     i32::from(a.logical_minimum),
                     i32::from(a.logical_maximum)
                 );
                 if let (Some(min), Some(max)) = (a.physical_minimum, a.physical_maximum) {
-                    print!(
+                    cprint!(
+                        stream,
+                        Styles::None,
                         "Physical Range: {:5}->{:5} | ",
                         i32::from(min),
                         i32::from(max)
@@ -352,12 +386,12 @@ fn print_report(r: &impl Report) {
                 };
                 if let Some(u) = a.unit {
                     if let Some(units) = u.units() {
-                        print!("Unit: {:?}: {:?}", u.system(), units);
+                        cprint!(stream, Styles::None, "Unit: {:?}: {:?}", u.system(), units);
                     }
                 }
             }
         }
-        println!();
+        cprintln!(stream);
     }
 }
 
@@ -391,7 +425,7 @@ fn parse_uevent(sysfs: &Path) -> Result<(String, (u32, u32, u32))> {
     Ok((name.to_string(), (bustype, vid, pid)))
 }
 
-fn parse(path: &Path) -> Result<ReportDescriptor> {
+fn parse(stream: &mut impl Write, path: &Path) -> Result<ReportDescriptor> {
     let sysfs = find_sysfs_path(path)?;
     let rdesc_path = sysfs.join("report_descriptor");
     if !rdesc_path.exists() {
@@ -401,9 +435,9 @@ fn parse(path: &Path) -> Result<ReportDescriptor> {
     let (name, ids) = parse_uevent(&sysfs)?;
     let (bustype, vid, pid) = ids;
 
-    println!("# {name}");
+    cprintln!(stream, Styles::None, "# {name}");
     let bytes = std::fs::read(rdesc_path)?;
-    parse_rdesc(&bytes)?;
+    parse_rdesc(stream, &bytes)?;
 
     // Print the readable fields
     let bytestr = bytes
@@ -411,44 +445,57 @@ fn parse(path: &Path) -> Result<ReportDescriptor> {
         .map(|b| format!("{b:02x}"))
         .collect::<Vec<String>>()
         .join(" ");
-    cprintln!(Styles::Data, "R: {bytestr}");
-    cprintln!(Styles::Data, "N: {name}");
-    cprintln!(Styles::Data, "I: {bustype:x} {vid:x} {pid:x}");
+    cprintln!(stream, Styles::Data, "R: {bytestr}");
+    cprintln!(stream, Styles::Data, "N: {name}");
+    cprintln!(stream, Styles::Data, "I: {bustype:x} {vid:x} {pid:x}");
 
     let rdesc = ReportDescriptor::try_from(&bytes as &[u8])?;
-    println!("# Report descriptor:");
+    cprintln!(stream, Styles::None, "# Report descriptor:");
     let input_reports = rdesc.input_reports();
     if !input_reports.is_empty() {
         for r in rdesc.input_reports() {
-            cprintln!(Styles::InputItem, "# ------- Input Report ------- ");
-            print_report(r);
+            cprintln!(stream, Styles::InputItem, "# ------- Input Report ------- ");
+            print_report(stream, r);
         }
     }
     let output_reports = rdesc.output_reports();
     if !output_reports.is_empty() {
         for r in rdesc.output_reports() {
-            cprintln!(Styles::OutputItem, "# ------- Output Report ------- ");
-            print_report(r);
+            cprintln!(
+                stream,
+                Styles::OutputItem,
+                "# ------- Output Report ------- "
+            );
+            print_report(stream, r);
         }
     }
     let feature_reports = rdesc.feature_reports();
     if !feature_reports.is_empty() {
         for r in rdesc.feature_reports() {
-            cprintln!(Styles::FeatureItem, "# ------- Feature Report ------- ");
-            print_report(r);
+            cprintln!(
+                stream,
+                Styles::FeatureItem,
+                "# ------- Feature Report ------- "
+            );
+            print_report(stream, r);
         }
     }
 
     Ok(rdesc)
 }
 
-fn parse_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Instant) -> Result<()> {
+fn parse_report(
+    stream: &mut impl Write,
+    bytes: &[u8],
+    rdesc: &ReportDescriptor,
+    start_time: &Instant,
+) -> Result<()> {
     let Some(report) = rdesc.find_input_report(bytes) else {
         bail!("Unable to find matching report");
     };
 
     if let Some(id) = report.report_id() {
-        println!("# Report ID: {id} / ");
+        cprintln!(stream, Styles::None, "# Report ID: {id} / ");
     }
 
     let mut current_collection: Option<&Collection> = None;
@@ -481,18 +528,20 @@ fn parse_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Instant) ->
     for field in report.fields() {
         match field {
             Field::Constant(_) => {
-                print!(
+                cprint!(
+                    stream,
+                    Styles::None,
                     "#  |             <{} bits padding>",
                     field.bits().clone().count()
                 );
-                println!();
+                cprintln!(stream);
             }
             Field::Variable(var) => {
                 let changed: bool;
                 (changed, current_collection) =
                     compare_collections(&var.collections, current_collection);
                 if changed {
-                    println!("#  +------------------------------");
+                    cprintln!(stream, Styles::None, "#  +------------------------------");
                 }
                 let v = var.extract_i32(bytes).unwrap();
                 let u = var.usage;
@@ -506,8 +555,8 @@ fn parse_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Instant) ->
                         u16::from(u.usage_id)
                     )
                 };
-                print!("#  |             ");
-                println!("{:20}: {:5} |", hutstr, v);
+                cprint!(stream, Styles::None, "#  |             ");
+                cprintln!(stream, Styles::None, "{:20}: {:5} |", hutstr, v);
             }
             Field::Array(arr) => {
                 let changed: bool;
@@ -542,8 +591,8 @@ fn parse_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Instant) ->
                                 u16::from(usage.usage_id)
                             )
                         };
-                        print!("#                ");
-                        println!("{:20}: {:5} |", hutstr, v);
+                        cprint!(stream, Styles::None, "#                ");
+                        cprintln!(stream, Styles::None, "{:20}: {:5} |", hutstr, v);
                     }
                 });
             }
@@ -553,6 +602,7 @@ fn parse_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Instant) ->
     let elapsed = start_time.elapsed();
 
     cprintln!(
+        stream,
         Styles::Data,
         "E: {:06}.{:06} {} {}",
         elapsed.as_secs(),
@@ -566,7 +616,7 @@ fn parse_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Instant) ->
     Ok(())
 }
 
-fn read_events(path: &Path, rdesc: &ReportDescriptor) -> Result<()> {
+fn read_events(stream: &mut impl Write, path: &Path, rdesc: &ReportDescriptor) -> Result<()> {
     let mut f = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK)
@@ -585,7 +635,7 @@ fn read_events(path: &Path, rdesc: &ReportDescriptor) -> Result<()> {
                     } else {
                         now
                     };
-                    parse_report(&data, rdesc, &now.unwrap())?;
+                    parse_report(stream, &data, rdesc, &now.unwrap())?;
                 }
                 Err(e) => {
                     if e.kind() != std::io::ErrorKind::WouldBlock {
@@ -602,21 +652,28 @@ fn read_events(path: &Path, rdesc: &ReportDescriptor) -> Result<()> {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    // Bit lame but easier to just set the env for owo_colors to figure out the rest
-    match cli.color {
-        ClapColorArg::Never => std::env::set_var("NO_COLOR", "1"),
-        ClapColorArg::Auto => {}
-        ClapColorArg::Always => std::env::set_var("FORCE_COLOR", "1"),
-    }
+    let mut stream: Box<dyn Write> = if cli.output_file == "-" {
+        // Bit lame but easier to just set the env for owo_colors to figure out the rest
+        match cli.color {
+            ClapColorArg::Never => std::env::set_var("NO_COLOR", "1"),
+            ClapColorArg::Auto => {}
+            ClapColorArg::Always => std::env::set_var("FORCE_COLOR", "1"),
+        }
 
-    let rc = parse(&cli.path);
+        Box::new(std::io::stdout())
+    } else {
+        std::env::set_var("NO_COLOR", "1");
+        Box::new(std::fs::File::create(cli.output_file).unwrap())
+    };
+
+    let rc = parse(&mut stream, &cli.path);
     if let Err(e) = rc {
         eprintln!("Error: {e:#}");
         return ExitCode::FAILURE;
     }
     let rc = if cli.path.starts_with("/dev") {
         let rdesc = rc.unwrap();
-        read_events(&cli.path, &rdesc)
+        read_events(&mut stream, &cli.path, &rdesc)
     } else {
         Ok(())
     };
