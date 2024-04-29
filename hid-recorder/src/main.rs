@@ -2,7 +2,6 @@
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use libc;
 use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
 use std::fs::OpenOptions;
 use std::io::Read;
