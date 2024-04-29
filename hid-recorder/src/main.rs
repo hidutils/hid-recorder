@@ -189,9 +189,8 @@ fn parse_rdesc(bytes: &[u8]) -> Result<()> {
             .collect::<Vec<String>>()
             .join("");
 
-        match item.item_type() {
-            ItemType::Main(MainItem::EndCollection) => indent -= 2,
-            _ => {}
+        if let ItemType::Main(MainItem::EndCollection) = item.item_type() {
+            indent -= 2;
         }
 
         let indented = format!("{:indent$}{}", "", fmt_item(item, &current_usage_page));
@@ -274,9 +273,8 @@ fn print_report(r: &impl Report) {
                     );
                 };
                 if let Some(u) = v.unit {
-                    match u.units() {
-                        Some(units) => print!("Unit: {:?}: {:?}", u.system(), units),
-                        None => {}
+                    if let Some(units) = u.units() {
+                        print!("Unit: {:?}: {:?}", u.system(), units);
                     }
                 }
             }
@@ -307,9 +305,8 @@ fn print_report(r: &impl Report) {
                     );
                 };
                 if let Some(u) = a.unit {
-                    match u.units() {
-                        Some(units) => print!("Unit: {:?}: {:?}", u.system(), units),
-                        None => {}
+                    if let Some(units) = u.units() {
+                        print!("Unit: {:?}: {:?}", u.system(), units);
                     }
                 }
             }
@@ -330,16 +327,16 @@ fn parse_uevent(sysfs: &Path) -> Result<(String, (u32, u32, u32))> {
         .find(|l| l.starts_with("HID_NAME"))
         .context("Unable to find HID_NAME in uevent")?;
     let (_, name) = name
-        .split_once("=")
+        .split_once('=')
         .context("Unexpected HID_NAME= format")?;
 
     let id = uevent
         .lines()
         .find(|l| l.starts_with("HID_ID"))
         .context("Unable to find HID_ID in uevent")?;
-    let (_, id) = id.split_once("=").context("Unexpected HID_ID= format")?;
+    let (_, id) = id.split_once('=').context("Unexpected HID_ID= format")?;
     let ids: Vec<u32> = id
-        .split(":")
+        .split(':')
         .map(|s| u32::from_str_radix(s, 16).context("Failed to parse {s} to int"))
         .collect::<Result<Vec<u32>>>()
         .context("Unable to parse HID_ID")?;
@@ -445,7 +442,7 @@ fn parse_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Instant) ->
                     "#  |             <{} bits padding>",
                     field.bits().clone().count()
                 );
-                println!("");
+                println!();
             }
             Field::Variable(var) => {
                 let changed: bool;
@@ -467,7 +464,7 @@ fn parse_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Instant) ->
                     )
                 };
                 print!("#  |             ");
-                println!("{:20}: {:5} |", hutstr, i32::from(v));
+                println!("{:20}: {:5} |", hutstr, v);
             }
             Field::Array(arr) => {
                 let changed: bool;
