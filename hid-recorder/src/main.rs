@@ -318,24 +318,7 @@ fn print_report(r: &impl Report) {
     }
 }
 
-fn parse(path: &Path) -> Result<ReportDescriptor> {
-    let sysfs = find_sysfs_path(path)?;
-    let rdesc_path = sysfs.join("report_descriptor");
-    if !rdesc_path.exists() {
-        bail!("Unable to find report descriptor at {rdesc_path:?}");
-    }
-
-    let bytes = std::fs::read(rdesc_path)?;
-    parse_rdesc(&bytes)?;
-
-    // Print the readable fields
-    let bytestr = bytes
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<Vec<String>>()
-        .join(" ");
-    println!("R: {bytestr}");
-
+fn parse_uevent(sysfs: &Path) -> Result<(String, (u32, u32, u32))> {
     // uevent should contain
     // HID_NAME=foo bar
     // HID_ID=00003:0002135:0000123513
@@ -349,7 +332,6 @@ fn parse(path: &Path) -> Result<ReportDescriptor> {
     let (_, name) = name
         .split_once("=")
         .context("Unexpected HID_NAME= format")?;
-    println!("N: {name}");
 
     let id = uevent
         .lines()
@@ -363,6 +345,31 @@ fn parse(path: &Path) -> Result<ReportDescriptor> {
         .context("Unable to parse HID_ID")?;
     let (bustype, vid, pid) = (ids[0], ids[1], ids[2]);
 
+    Ok((name.to_string(), (bustype, vid, pid)))
+}
+
+fn parse(path: &Path) -> Result<ReportDescriptor> {
+    let sysfs = find_sysfs_path(path)?;
+    let rdesc_path = sysfs.join("report_descriptor");
+    if !rdesc_path.exists() {
+        bail!("Unable to find report descriptor at {rdesc_path:?}");
+    }
+
+    let (name, ids) = parse_uevent(&sysfs)?;
+    let (bustype, vid, pid) = ids;
+
+    println!("# {name}");
+    let bytes = std::fs::read(rdesc_path)?;
+    parse_rdesc(&bytes)?;
+
+    // Print the readable fields
+    let bytestr = bytes
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<String>>()
+        .join(" ");
+    println!("R: {bytestr}");
+    println!("N: {name}");
     println!("I: {bustype:x} {vid:x} {pid:x}");
 
     let rdesc = ReportDescriptor::try_from(&bytes as &[u8])?;
