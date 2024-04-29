@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 
 use anyhow::{bail, Context, Result};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
+use owo_colors::{OwoColorize, Stream::Stdout, Style};
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::os::fd::AsFd;
@@ -18,12 +19,50 @@ use hidreport::hid::{
 use hidreport::hut;
 use hidreport::*;
 
+enum Styles {
+    None,
+    InputItem,
+    OutputItem,
+    FeatureItem,
+    Data,
+}
+
+impl Styles {
+    fn style(&self) -> Style {
+        match self {
+            Styles::None => Style::new(),
+            Styles::Data => Style::new().red(),
+            Styles::InputItem => Style::new().green().bold(),
+            Styles::OutputItem => Style::new().yellow().bold(),
+            Styles::FeatureItem => Style::new().blue().bold(),
+        }
+    }
+}
+
+// Usage: cprintln!(Sytles::Data, <normal println args>)
+macro_rules! cprintln {
+    () => { println!(); };
+    ($style:expr, $($arg:tt)*) => {{
+        println!("{}", format!($($arg)*).if_supports_color(Stdout, |text| text.style($style.style())));
+    }};
+}
+
+#[derive(ValueEnum, Clone, Debug)]
+enum ClapColorArg {
+    Auto,
+    Never,
+    Always,
+}
+
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
     /// Print debugging information
     #[arg(short, long, default_value_t = false)]
     debug: bool,
+
+    #[arg(long, value_enum, default_value_t = ClapColorArg::Auto)]
+    color: ClapColorArg,
 
     /// Path to the hidraw device node
     path: PathBuf,
@@ -194,7 +233,14 @@ fn parse_rdesc(bytes: &[u8]) -> Result<()> {
         }
 
         let indented = format!("{:indent$}{}", "", fmt_item(item, &current_usage_page));
-        println!("# {bytes:30} // {indented:40} {offset}");
+        let style = match item.item_type() {
+            ItemType::Main(MainItem::Input(..)) => Styles::InputItem,
+            ItemType::Main(MainItem::Output(..)) => Styles::OutputItem,
+            ItemType::Main(MainItem::Feature(..)) => Styles::FeatureItem,
+            _ => Styles::None,
+        };
+        cprintln!(style, "# {bytes:30} // {indented:40} {offset}");
+
         match item.item_type() {
             ItemType::Main(MainItem::Collection(_)) => indent += 2,
             ItemType::Global(GlobalItem::UsagePage { usage_page }) => {
@@ -365,33 +411,30 @@ fn parse(path: &Path) -> Result<ReportDescriptor> {
         .map(|b| format!("{b:02x}"))
         .collect::<Vec<String>>()
         .join(" ");
-    println!("R: {bytestr}");
-    println!("N: {name}");
-    println!("I: {bustype:x} {vid:x} {pid:x}");
+    cprintln!(Styles::Data, "R: {bytestr}");
+    cprintln!(Styles::Data, "N: {name}");
+    cprintln!(Styles::Data, "I: {bustype:x} {vid:x} {pid:x}");
 
     let rdesc = ReportDescriptor::try_from(&bytes as &[u8])?;
     println!("# Report descriptor:");
     let input_reports = rdesc.input_reports();
     if !input_reports.is_empty() {
-        println!("# Input reports:");
         for r in rdesc.input_reports() {
-            println!("# ------- Input Report ------- ");
+            cprintln!(Styles::InputItem, "# ------- Input Report ------- ");
             print_report(r);
         }
     }
     let output_reports = rdesc.output_reports();
     if !output_reports.is_empty() {
-        println!("# Output reports:");
         for r in rdesc.output_reports() {
-            println!("# ------- Output Report ------- ");
+            cprintln!(Styles::OutputItem, "# ------- Output Report ------- ");
             print_report(r);
         }
     }
     let feature_reports = rdesc.feature_reports();
     if !feature_reports.is_empty() {
-        println!("# Feature reports:");
         for r in rdesc.feature_reports() {
-            println!("# ------- Feature Report ------- ");
+            cprintln!(Styles::FeatureItem, "# ------- Feature Report ------- ");
             print_report(r);
         }
     }
@@ -509,7 +552,8 @@ fn parse_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Instant) ->
 
     let elapsed = start_time.elapsed();
 
-    println!(
+    cprintln!(
+        Styles::Data,
         "E: {:06}.{:06} {} {}",
         elapsed.as_secs(),
         elapsed.as_micros() % 1000000,
@@ -557,6 +601,13 @@ fn read_events(path: &Path, rdesc: &ReportDescriptor) -> Result<()> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+
+    // Bit lame but easier to just set the env for owo_colors to figure out the rest
+    match cli.color {
+        ClapColorArg::Never => std::env::set_var("NO_COLOR", "1"),
+        ClapColorArg::Auto => {}
+        ClapColorArg::Always => std::env::set_var("FORCE_COLOR", "1"),
+    }
 
     let rc = parse(&cli.path);
     if let Err(e) = rc {
