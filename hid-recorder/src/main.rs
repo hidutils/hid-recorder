@@ -4,6 +4,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
 use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
 use owo_colors::{OwoColorize, Stream::Stdout, Style};
+use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::os::fd::AsFd;
@@ -498,105 +499,84 @@ fn parse_report(
         cprintln!(stream, Styles::None, "# Report ID: {id} / ");
     }
 
-    let mut current_collection: Option<&Collection> = None;
+    let collections: HashSet<&Collection> = report
+        .fields()
+        .iter()
+        .flat_map(|f| f.collections())
+        .filter(|c| matches!(c.collection_type(), CollectionType::Logical))
+        .collect();
+    let mut collections: Vec<&Collection> = collections.into_iter().collect();
+    collections.sort_by(|a, b| a.id().partial_cmp(b.id()).unwrap());
 
-    /// Check for a logical collections in the slice and compare it to the current one,
-    /// returning either the current one (if unchanged) or the new one (if changed).
-    /// If no logical collection is present, None is returned.
-    fn compare_collections<'a>(
-        collections: &'a [Collection],
-        current: Option<&'a Collection>,
-    ) -> (bool, Option<&'a Collection>) {
-        let c = collections
-            .iter()
-            .find(|&c| matches!(c.collection_type(), CollectionType::Logical));
-        let (changed, newc) = match c {
-            // true only on the first call
-            Some(c) if current.is_none() => (true, Some(c)),
-            Some(c) => {
-                if c != current.unwrap() {
-                    (true, Some(c))
-                } else {
-                    (false, current)
+    for collection in collections {
+        cprint!(stream, Styles::None, "#                ");
+        for field in report.fields().iter().filter(|f| {
+            // logical collections may be nested, so we only group those items together
+            // where the deepest logical collection matches
+            f.collections()
+                .iter()
+                .rev()
+                .find(|c| matches!(c.collection_type(), CollectionType::Logical))
+                .map(|c| c == collection)
+                .unwrap_or(false)
+        }) {
+            match field {
+                Field::Constant(_) => {
+                    cprint!(
+                        stream,
+                        Styles::None,
+                        "<{} bits padding> | ",
+                        field.bits().clone().count()
+                    );
                 }
-            }
-            None => (false, current),
-        };
-        (changed, newc)
-    }
-
-    for field in report.fields() {
-        match field {
-            Field::Constant(_) => {
-                cprint!(
-                    stream,
-                    Styles::None,
-                    "#  |             <{} bits padding>",
-                    field.bits().clone().count()
-                );
-                cprintln!(stream);
-            }
-            Field::Variable(var) => {
-                let changed: bool;
-                (changed, current_collection) =
-                    compare_collections(&var.collections, current_collection);
-                if changed {
-                    cprintln!(stream, Styles::None, "#  +------------------------------");
-                }
-                let v = var.extract_i32(bytes).unwrap();
-                let u = var.usage;
-                let hut = hut::Usage::try_from(&u);
-                let hutstr = if let Ok(hut) = hut {
-                    format!("{hut}")
-                } else {
-                    format!(
-                        "{:04x}/{:04x}",
-                        u16::from(u.usage_page),
-                        u16::from(u.usage_id)
-                    )
-                };
-                cprint!(stream, Styles::None, "#  |             ");
-                cprintln!(stream, Styles::None, "{:20}: {:5} |", hutstr, v);
-            }
-            Field::Array(arr) => {
-                let changed: bool;
-                (changed, current_collection) =
-                    compare_collections(&arr.collections, current_collection);
-                if changed {
-                    println!("#  +------------------------------");
-                }
-
-                let usage_range = arr.usage_range();
-
-                // The values in the array are usage values between usage min/max
-                let vs = arr.extract_u32(bytes).unwrap();
-                vs.iter().for_each(|v| {
-                    // Does the value have a usage page?
-                    let usage = if (v & 0xffff0000) != 0 {
-                        Usage::from(*v)
+                Field::Variable(var) => {
+                    let v = var.extract_i32(bytes).unwrap();
+                    let u = var.usage;
+                    let hut = hut::Usage::try_from(&u);
+                    let hutstr = if let Ok(hut) = hut {
+                        format!("{hut}")
                     } else {
-                        Usage::from_page_and_id(
-                            usage_range.minimum().usage_page(),
-                            UsageId::from(*v as u16),
+                        format!(
+                            "{:04x}/{:04x}",
+                            u16::from(u.usage_page),
+                            u16::from(u.usage_id)
                         )
                     };
-                    // Usage within range?
-                    if let Some(usage) = usage_range.lookup_usage(&usage) {
-                        let hutstr = if let Ok(hut) = hut::Usage::try_from(usage) {
-                            format!("{hut}")
+                    cprint!(stream, Styles::None, "{}: {:5} | ", hutstr, v);
+                }
+                Field::Array(arr) => {
+                    let usage_range = arr.usage_range();
+
+                    // The values in the array are usage values between usage min/max
+                    let vs = arr.extract_u32(bytes).unwrap();
+                    vs.iter().for_each(|v| {
+                        // Does the value have a usage page?
+                        let usage = if (v & 0xffff0000) != 0 {
+                            Usage::from(*v)
                         } else {
-                            format!(
-                                "{:04x}/{:04x}",
-                                u16::from(usage.usage_page),
-                                u16::from(usage.usage_id)
+                            Usage::from_page_and_id(
+                                usage_range.minimum().usage_page(),
+                                UsageId::from(*v as u16),
                             )
                         };
-                        cprint!(stream, Styles::None, "#                ");
-                        cprintln!(stream, Styles::None, "{:20}: {:5} |", hutstr, v);
-                    }
-                });
+                        // Usage within range?
+                        if let Some(usage) = usage_range.lookup_usage(&usage) {
+                            let hutstr = if let Ok(hut) = hut::Usage::try_from(usage) {
+                                format!("{hut}")
+                            } else {
+                                format!(
+                                    "{:04x}/{:04x}",
+                                    u16::from(usage.usage_page),
+                                    u16::from(usage.usage_id)
+                                )
+                            };
+                            cprint!(stream, Styles::None, "{}: {:5} | ", hutstr, v);
+                        }
+                    });
+                }
             }
         }
+        cprintln!(stream);
     }
 
     let elapsed = start_time.elapsed();
