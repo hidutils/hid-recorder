@@ -25,6 +25,7 @@ enum Styles {
     InputItem,
     OutputItem,
     FeatureItem,
+    ReportId,
     Data,
 }
 
@@ -36,6 +37,7 @@ impl Styles {
             Styles::InputItem => Style::new().green().bold(),
             Styles::OutputItem => Style::new().yellow().bold(),
             Styles::FeatureItem => Style::new().blue().bold(),
+            Styles::ReportId => Style::new().magenta(),
         }
     }
 }
@@ -248,6 +250,7 @@ fn parse_rdesc(stream: &mut impl Write, bytes: &[u8]) -> Result<()> {
             ItemType::Main(MainItem::Input(..)) => Styles::InputItem,
             ItemType::Main(MainItem::Output(..)) => Styles::OutputItem,
             ItemType::Main(MainItem::Feature(..)) => Styles::FeatureItem,
+            ItemType::Global(GlobalItem::ReportId { .. }) => Styles::ReportId,
             _ => Styles::None,
         };
         cprintln!(stream, style, "# {bytes:30} // {indented:40} {offset}");
