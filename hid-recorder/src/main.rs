@@ -27,6 +27,7 @@ enum Styles {
     FeatureItem,
     ReportId,
     Data,
+    Separator,
 }
 
 impl Styles {
@@ -38,6 +39,7 @@ impl Styles {
             Styles::OutputItem => Style::new().yellow().bold(),
             Styles::FeatureItem => Style::new().blue().bold(),
             Styles::ReportId => Style::new().magenta(),
+            Styles::Separator => Style::new().magenta(),
         }
     }
 }
@@ -639,6 +641,19 @@ fn parse_report(
 }
 
 fn read_events(stream: &mut impl Write, path: &Path, rdesc: &ReportDescriptor) -> Result<()> {
+    cprintln!(
+        stream,
+        Styles::Separator,
+        "##############################################################################"
+    );
+    cprintln!(stream, Styles::None, "# Recorded events below in format:");
+    cprintln!(
+        stream,
+        Styles::None,
+        "# E: <seconds>.<microseconds> <length-in-bytes> [bytes ...]",
+    );
+    cprintln!(stream, Styles::None, "#");
+
     let mut f = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK)
