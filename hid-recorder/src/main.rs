@@ -660,19 +660,20 @@ fn read_events(stream: &mut impl Write, path: &Path, rdesc: &ReportDescriptor) -
         .open(path)?;
 
     let timeout = PollTimeout::try_from(-1).unwrap();
-    let mut now: Option<Instant> = None;
+    let mut start_time: Option<Instant> = None;
     let mut data = [0; 1024];
     loop {
         let mut pollfds = [PollFd::new(f.as_fd(), PollFlags::POLLIN)];
         if poll(&mut pollfds, timeout)? > 0 {
             match f.read(&mut data) {
                 Ok(_nbytes) => {
-                    now = if now.is_none() {
+                    start_time = if start_time.is_none() {
                         Some(Instant::now())
                     } else {
-                        now
+                        start_time
                     };
-                    parse_report(stream, &data, rdesc, &now.unwrap())?;
+
+                    parse_report(stream, &data, rdesc, &start_time.unwrap())?;
                 }
                 Err(e) => {
                     if e.kind() != std::io::ErrorKind::WouldBlock {
