@@ -485,6 +485,64 @@ fn parse(stream: &mut impl Write, path: &Path) -> Result<ReportDescriptor> {
     Ok(rdesc)
 }
 
+fn print_field_values(stream: &mut impl Write, bytes: &[u8], field: &Field) {
+    match field {
+        Field::Constant(_) => {
+            cprint!(
+                stream,
+                Styles::None,
+                "<{} bits padding> | ",
+                field.bits().clone().count()
+            );
+        }
+        Field::Variable(var) => {
+            let v = var.extract_i32(bytes).unwrap();
+            let u = var.usage;
+            let hut = hut::Usage::try_from(&u);
+            let hutstr = if let Ok(hut) = hut {
+                format!("{hut}")
+            } else {
+                format!(
+                    "{:04x}/{:04x}",
+                    u16::from(u.usage_page),
+                    u16::from(u.usage_id)
+                )
+            };
+            cprint!(stream, Styles::None, "{}: {:5} | ", hutstr, v);
+        }
+        Field::Array(arr) => {
+            let usage_range = arr.usage_range();
+
+            // The values in the array are usage values between usage min/max
+            let vs = arr.extract_u32(bytes).unwrap();
+            vs.iter().for_each(|v| {
+                // Does the value have a usage page?
+                let usage = if (v & 0xffff0000) != 0 {
+                    Usage::from(*v)
+                } else {
+                    Usage::from_page_and_id(
+                        usage_range.minimum().usage_page(),
+                        UsageId::from(*v as u16),
+                    )
+                };
+                // Usage within range?
+                if let Some(usage) = usage_range.lookup_usage(&usage) {
+                    let hutstr = if let Ok(hut) = hut::Usage::try_from(usage) {
+                        format!("{hut}")
+                    } else {
+                        format!(
+                            "{:04x}/{:04x}",
+                            u16::from(usage.usage_page),
+                            u16::from(usage.usage_id)
+                        )
+                    };
+                    cprint!(stream, Styles::None, "{}: {:5} | ", hutstr, v);
+                }
+            });
+        }
+    }
+}
+
 fn parse_report(
     stream: &mut impl Write,
     bytes: &[u8],
@@ -505,78 +563,32 @@ fn parse_report(
         .flat_map(|f| f.collections())
         .filter(|c| matches!(c.collection_type(), CollectionType::Logical))
         .collect();
-    let mut collections: Vec<&Collection> = collections.into_iter().collect();
-    collections.sort_by(|a, b| a.id().partial_cmp(b.id()).unwrap());
-
-    for collection in collections {
+    if collections.is_empty() {
         cprint!(stream, Styles::None, "#                ");
-        for field in report.fields().iter().filter(|f| {
-            // logical collections may be nested, so we only group those items together
-            // where the deepest logical collection matches
-            f.collections()
-                .iter()
-                .rev()
-                .find(|c| matches!(c.collection_type(), CollectionType::Logical))
-                .map(|c| c == collection)
-                .unwrap_or(false)
-        }) {
-            match field {
-                Field::Constant(_) => {
-                    cprint!(
-                        stream,
-                        Styles::None,
-                        "<{} bits padding> | ",
-                        field.bits().clone().count()
-                    );
-                }
-                Field::Variable(var) => {
-                    let v = var.extract_i32(bytes).unwrap();
-                    let u = var.usage;
-                    let hut = hut::Usage::try_from(&u);
-                    let hutstr = if let Ok(hut) = hut {
-                        format!("{hut}")
-                    } else {
-                        format!(
-                            "{:04x}/{:04x}",
-                            u16::from(u.usage_page),
-                            u16::from(u.usage_id)
-                        )
-                    };
-                    cprint!(stream, Styles::None, "{}: {:5} | ", hutstr, v);
-                }
-                Field::Array(arr) => {
-                    let usage_range = arr.usage_range();
-
-                    // The values in the array are usage values between usage min/max
-                    let vs = arr.extract_u32(bytes).unwrap();
-                    vs.iter().for_each(|v| {
-                        // Does the value have a usage page?
-                        let usage = if (v & 0xffff0000) != 0 {
-                            Usage::from(*v)
-                        } else {
-                            Usage::from_page_and_id(
-                                usage_range.minimum().usage_page(),
-                                UsageId::from(*v as u16),
-                            )
-                        };
-                        // Usage within range?
-                        if let Some(usage) = usage_range.lookup_usage(&usage) {
-                            let hutstr = if let Ok(hut) = hut::Usage::try_from(usage) {
-                                format!("{hut}")
-                            } else {
-                                format!(
-                                    "{:04x}/{:04x}",
-                                    u16::from(usage.usage_page),
-                                    u16::from(usage.usage_id)
-                                )
-                            };
-                            cprint!(stream, Styles::None, "{}: {:5} | ", hutstr, v);
-                        }
-                    });
-                }
-            }
+        for field in report.fields() {
+            print_field_values(stream, bytes, field);
         }
         cprintln!(stream);
+    } else {
+        let mut collections: Vec<&Collection> = collections.into_iter().collect();
+        collections.sort_by(|a, b| a.id().partial_cmp(b.id()).unwrap());
+
+        for collection in collections {
+            cprint!(stream, Styles::None, "#                ");
+            for field in report.fields().iter().filter(|f| {
+                // logical collections may be nested, so we only group those items together
+                // where the deepest logical collection matches
+                f.collections()
+                    .iter()
+                    .rev()
+                    .find(|c| matches!(c.collection_type(), CollectionType::Logical))
+                    .map(|c| c == collection)
+                    .unwrap_or(false)
+            }) {
+                print_field_values(stream, bytes, field);
+            }
+            cprintln!(stream);
+        }
     }
 
     let elapsed = start_time.elapsed();
