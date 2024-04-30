@@ -28,6 +28,7 @@ enum Styles {
     ReportId,
     Data,
     Separator,
+    Timestamp,
 }
 
 impl Styles {
@@ -40,6 +41,7 @@ impl Styles {
             Styles::FeatureItem => Style::new().blue().bold(),
             Styles::ReportId => Style::new().magenta(),
             Styles::Separator => Style::new().magenta(),
+            Styles::Timestamp => Style::new().purple(),
         }
     }
 }
@@ -654,6 +656,13 @@ fn read_events(stream: &mut impl Write, path: &Path, rdesc: &ReportDescriptor) -
     );
     cprintln!(stream, Styles::None, "#");
 
+    cprintln!(
+        stream,
+        Styles::Timestamp,
+        "# Current time: {}",
+        chrono::prelude::Local::now().format("%H:%M:%S").to_string()
+    );
+
     let mut f = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK)
@@ -661,6 +670,7 @@ fn read_events(stream: &mut impl Write, path: &Path, rdesc: &ReportDescriptor) -
 
     let timeout = PollTimeout::try_from(-1).unwrap();
     let mut start_time: Option<Instant> = None;
+    let mut last_timestamp: Option<Instant> = None;
     let mut data = [0; 1024];
     loop {
         let mut pollfds = [PollFd::new(f.as_fd(), PollFlags::POLLIN)];
@@ -672,6 +682,17 @@ fn read_events(stream: &mut impl Write, path: &Path, rdesc: &ReportDescriptor) -
                     } else {
                         start_time
                     };
+
+                    let elapsed = last_timestamp.or(start_time).unwrap().elapsed();
+                    if elapsed.as_secs() > 5 {
+                        cprintln!(
+                            stream,
+                            Styles::Timestamp,
+                            "# Current time: {}",
+                            chrono::prelude::Local::now().format("%H:%M:%S").to_string()
+                        );
+                        last_timestamp = Some(Instant::now());
+                    }
 
                     parse_report(stream, &data, rdesc, &start_time.unwrap())?;
                 }
