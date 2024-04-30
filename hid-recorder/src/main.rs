@@ -708,7 +708,7 @@ fn read_events(stream: &mut impl Write, path: &Path, rdesc: &ReportDescriptor) -
     Ok(())
 }
 
-fn main() -> ExitCode {
+fn hid_recorder() -> Result<()> {
     let cli = Cli::parse();
 
     let mut stream: Box<dyn Write> = if cli.output_file == "-" {
@@ -725,18 +725,15 @@ fn main() -> ExitCode {
         Box::new(std::fs::File::create(cli.output_file).unwrap())
     };
 
-    let rc = parse(&mut stream, &cli.path);
-    if let Err(e) = rc {
-        eprintln!("Error: {e:#}");
-        return ExitCode::FAILURE;
+    let rdesc = parse(&mut stream, &cli.path)?;
+    if cli.path.starts_with("/dev") {
+        read_events(&mut stream, &cli.path, &rdesc)?
     }
-    let rc = if cli.path.starts_with("/dev") {
-        let rdesc = rc.unwrap();
-        read_events(&mut stream, &cli.path, &rdesc)
-    } else {
-        Ok(())
-    };
+    Ok(())
+}
 
+fn main() -> ExitCode {
+    let rc = hid_recorder();
     match rc {
         Ok(_) => ExitCode::SUCCESS,
         Err(e) => {
