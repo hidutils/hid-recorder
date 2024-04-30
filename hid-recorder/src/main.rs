@@ -514,34 +514,61 @@ fn print_field_values(stream: &mut impl Write, bytes: &[u8], field: &Field) {
             cprint!(stream, Styles::None, "{}: {:5} | ", hutstr, v);
         }
         Field::Array(arr) => {
-            let usage_range = arr.usage_range();
-
             // The values in the array are usage values between usage min/max
             let vs = arr.extract_u32(bytes).unwrap();
-            vs.iter().for_each(|v| {
-                // Does the value have a usage page?
-                let usage = if (v & 0xffff0000) != 0 {
-                    Usage::from(*v)
-                } else {
-                    Usage::from_page_and_id(
-                        usage_range.minimum().usage_page(),
-                        UsageId::from(*v as u16),
-                    )
-                };
-                // Usage within range?
-                if let Some(usage) = usage_range.lookup_usage(&usage) {
-                    let hutstr = if let Ok(hut) = hut::Usage::try_from(usage) {
-                        format!("{hut}")
+            if arr.usages().len() > 1 {
+                let usage_range = arr.usage_range();
+
+                vs.iter().for_each(|v| {
+                    // Does the value have a usage page?
+                    let usage = if (v & 0xffff0000) != 0 {
+                        Usage::from(*v)
                     } else {
-                        format!(
-                            "{:04x}/{:04x}",
-                            u16::from(usage.usage_page),
-                            u16::from(usage.usage_id)
+                        Usage::from_page_and_id(
+                            usage_range.minimum().usage_page(),
+                            UsageId::from(*v as u16),
                         )
                     };
-                    cprint!(stream, Styles::None, "{}: {:5} | ", hutstr, v);
-                }
-            });
+                    // Usage within range?
+                    if let Some(usage) = usage_range.lookup_usage(&usage) {
+                        let hutstr = if let Ok(hut) = hut::Usage::try_from(usage) {
+                            format!("{hut}")
+                        } else {
+                            format!(
+                                "{:04x}/{:04x}",
+                                u16::from(usage.usage_page),
+                                u16::from(usage.usage_id)
+                            )
+                        };
+                        cprint!(stream, Styles::None, "{}: {:5} | ", hutstr, v);
+                    } else {
+                        // Let's just print the value as-is
+                        cprint!(stream, Styles::None, "{v:02x} | ");
+                    }
+                });
+            } else {
+                let hutstr = match arr.usages().first() {
+                    Some(usage) => {
+                        if let Ok(hut) = hut::Usage::try_from(usage) {
+                            format!("{hut}")
+                        } else {
+                            format!(
+                                "{:04x}/{:04x}",
+                                u16::from(usage.usage_page),
+                                u16::from(usage.usage_id)
+                            )
+                        }
+                    }
+                    None => "<unknown>".to_string(),
+                };
+                cprint!(
+                    stream,
+                    Styles::None,
+                    "{hutstr}: {} |",
+                    vs.iter()
+                        .fold("".to_string(), |acc, b| format!("{acc}{b:02x} "))
+                );
+            }
         }
     }
 }
