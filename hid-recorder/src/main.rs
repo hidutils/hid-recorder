@@ -453,7 +453,7 @@ fn parse(stream: &mut impl Write, path: &Path) -> Result<ReportDescriptor> {
         .map(|b| format!("{b:02x}"))
         .collect::<Vec<String>>()
         .join(" ");
-    cprintln!(stream, Styles::Data, "R: {bytestr}");
+    cprintln!(stream, Styles::Data, "R: {} {bytestr}", bytes.len());
     cprintln!(stream, Styles::Data, "N: {name}");
     cprintln!(stream, Styles::Data, "I: {bustype:x} {vid:x} {pid:x}");
 
