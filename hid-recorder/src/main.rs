@@ -82,7 +82,7 @@ struct Cli {
     output_file: String,
 
     /// Path to the hidraw device node
-    path: PathBuf,
+    path: Option<PathBuf>,
 }
 
 fn fmt_main_item(item: &MainItem) -> String {
@@ -708,6 +708,35 @@ fn read_events(stream: &mut impl Write, path: &Path, rdesc: &ReportDescriptor) -
     Ok(())
 }
 
+fn find_device() -> Result<PathBuf> {
+    eprintln!("Available devices:");
+    let mut hidraws: Vec<String> = std::fs::read_dir("/dev/")?
+        .flatten()
+        .flat_map(|f| f.file_name().into_string())
+        .filter(|name| name.starts_with("hidraw"))
+        .collect();
+
+    hidraws.sort();
+
+    for file in hidraws {
+        let uevent_path = PathBuf::from(format!("/sys/class/hidraw/{}/device/", file));
+        let (name, _) = parse_uevent(&uevent_path)?;
+        eprintln!("/dev/{}:    {name}", file);
+    }
+
+    eprint!("Select the device event number [0-9]: ");
+    std::io::stdout().flush().unwrap();
+    let mut buffer = String::new();
+    std::io::stdin().read_line(&mut buffer)?;
+
+    let path = PathBuf::from(format!("/dev/hidraw{}", buffer.trim()));
+    if !path.exists() {
+        bail!("Invalid device");
+    }
+
+    Ok(path)
+}
+
 fn hid_recorder() -> Result<()> {
     let cli = Cli::parse();
 
@@ -725,9 +754,14 @@ fn hid_recorder() -> Result<()> {
         Box::new(std::fs::File::create(cli.output_file).unwrap())
     };
 
-    let rdesc = parse(&mut stream, &cli.path)?;
-    if cli.path.starts_with("/dev") {
-        read_events(&mut stream, &cli.path, &rdesc)?
+    let path = match cli.path {
+        Some(path) => path,
+        None => find_device()?,
+    };
+
+    let rdesc = parse(&mut stream, &path)?;
+    if path.starts_with("/dev") {
+        read_events(&mut stream, &path, &rdesc)?
     }
     Ok(())
 }
