@@ -28,11 +28,13 @@ struct Cli {
     recording: PathBuf,
 }
 
+#[derive(Debug)]
 struct Event {
     usecs: u64,
     bytes: Vec<u8>,
 }
 
+#[derive(Debug)]
 struct Recording {
     name: String,
     ids: (u16, u16, u16),
