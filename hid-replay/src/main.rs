@@ -242,6 +242,8 @@ fn hid_replay() -> Result<()> {
         std::thread::sleep(Duration::from_millis(10));
     }
 
+    let mut pos = 0i8;
+    let mut direction = 1i8;
     loop {
         print!("Hit enter to start replaying the events");
         std::io::stdout().flush().unwrap();
@@ -260,10 +262,24 @@ fn hid_replay() -> Result<()> {
             // what our recording said
             let target_time = Duration::from_micros(e.usecs);
             if target_time > elapsed {
-                std::thread::sleep(target_time - elapsed);
+                let interval = target_time - elapsed;
+                if interval > Duration::from_secs(2) {
+                    let note = format!("***** Sleeping for {}s *****", interval.as_secs());
+                    print!("\r{:^50}", note);
+                    std::io::stdout().flush().unwrap();
+                }
+                std::thread::sleep(interval);
             }
+            print!("\r{1:0$}*{1:2$}", pos as usize, " ", 50 - pos as usize);
+            std::io::stdout().flush().unwrap();
             uhid_device.write(&e.bytes)?;
+            pos += direction;
+            if pos % 49 == 0 {
+                direction *= -1;
+            }
         }
+        print!("\r{:50}\r", " ");
+        std::io::stdout().flush().unwrap();
     }
 
     Ok(())
