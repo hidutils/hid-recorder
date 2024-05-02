@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
-use uhid_virt::{Bus, UHIDDevice};
+use uhid_virt::{Bus, OutputEvent, StreamError, UHIDDevice};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -141,7 +141,7 @@ fn hid_replay() -> Result<()> {
     };
 
     let create_params = uhid_virt::CreateParams {
-        name: recording.name,
+        name: format!("hid-replay {}", recording.name),
         phys: "".to_string(),
         uniq: "".to_string(),
         bus,
@@ -153,6 +153,63 @@ fn hid_replay() -> Result<()> {
     };
 
     let mut uhid_device = UHIDDevice::create(create_params)?;
+
+    let uhid_sysfs = PathBuf::from("/sys/devices/virtual/misc/uhid/");
+    // Devices use bus/vid/pid like this: 0003:056A:0357.0049 with the last component
+    // being an incremental (and thus not predictable) number
+    let globname = format!(
+        "{:04X}:{:04X}:{:04X}.*",
+        recording.ids.0, recording.ids.1, recording.ids.2
+    );
+    let globstr = uhid_sysfs.join(globname); //.join("hidraw");
+    let globstr = globstr.to_string_lossy();
+
+    loop {
+        // We might have a GetFeature request waiting which we'll just
+        // reply to with EIO, that's good enough for what we do here.
+        // uhid_virt doesn't expose the fd though so we can only
+        // try to read, fail, and continue, no polling.
+        match uhid_device.read() {
+            Ok(OutputEvent::GetReport { id, .. }) => {
+                println!("... have event");
+                uhid_device.write_get_report_reply(id, nix::errno::Errno::EIO as u16, vec![])?;
+            }
+            Ok(OutputEvent::SetReport { id, .. }) => {
+                println!("... have setreport");
+                uhid_device.write_set_report_reply(id, nix::errno::Errno::EIO as u16)?;
+            }
+            Ok(_) => {}
+            Err(StreamError::Io(e)) => match e.kind() {
+                std::io::ErrorKind::WouldBlock => {}
+                _ => bail!(e),
+            },
+            Err(StreamError::UnknownEventType(e)) => bail!("Unknown error {e}"),
+        }
+
+        // Check if there's a `hidraw` directory inside our just-created
+        // uhid sysfs path. If not we have the uhid device but not yet
+        // the hidraw device. This means the kernel is still sending us
+        // GetReports that we have to process.
+        //
+        // We may have multiple devices with the same bus/vid/pid so we check
+        // for all of them to have a hidraw directory. In the worst case we may
+        // have to wait for a different device to initialize but let's consider
+        // that a bit niche.
+        let mut have_elements = false;
+        if glob::glob(&globstr)
+            .context("Failed to read glob pattern")?
+            .inspect(|r| println!("{r:?}"))
+            .all(|e| {
+                have_elements = true;
+                e.is_ok() && e.unwrap().join("hidraw").exists()
+            })
+            && have_elements
+        {
+            println!("All devices exist, we're done");
+            break;
+        };
+        std::thread::sleep(Duration::from_millis(10));
+    }
 
     loop {
         print!("Hit enter to start replaying the events");

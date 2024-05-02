@@ -10,3 +10,5 @@ anyhow = "1.0.82"
 clap = { version = "4.5.4", features = ["derive"] }
 hex = "0.4.3"
 uhid-virt = "0.0.7"
+glob = "0.3.1"
+nix = "0.28.0"
