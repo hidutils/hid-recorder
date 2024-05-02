@@ -60,7 +60,7 @@ fn parse(path: &Path) -> Result<Recording> {
     let mut rdesc: Option<Vec<u8>> = None;
     let mut events: Vec<Event> = vec![];
     for line in lines
-        .flatten()
+        .map_while(Result::ok)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .map(|l| String::from(l.trim()))
     {
