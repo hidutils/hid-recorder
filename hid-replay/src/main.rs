@@ -161,7 +161,7 @@ fn hid_replay() -> Result<()> {
         "{:04X}:{:04X}:{:04X}.*",
         recording.ids.0, recording.ids.1, recording.ids.2
     );
-    let globstr = uhid_sysfs.join(globname); //.join("hidraw");
+    let globstr = uhid_sysfs.join(globname);
     let globstr = globstr.to_string_lossy();
 
     loop {
@@ -171,11 +171,9 @@ fn hid_replay() -> Result<()> {
         // try to read, fail, and continue, no polling.
         match uhid_device.read() {
             Ok(OutputEvent::GetReport { id, .. }) => {
-                println!("... have event");
                 uhid_device.write_get_report_reply(id, nix::errno::Errno::EIO as u16, vec![])?;
             }
             Ok(OutputEvent::SetReport { id, .. }) => {
-                println!("... have setreport");
                 uhid_device.write_set_report_reply(id, nix::errno::Errno::EIO as u16)?;
             }
             Ok(_) => {}
@@ -198,14 +196,12 @@ fn hid_replay() -> Result<()> {
         let mut have_elements = false;
         if glob::glob(&globstr)
             .context("Failed to read glob pattern")?
-            .inspect(|r| println!("{r:?}"))
             .all(|e| {
                 have_elements = true;
                 e.is_ok() && e.unwrap().join("hidraw").exists()
             })
             && have_elements
         {
-            println!("All devices exist, we're done");
             break;
         };
         std::thread::sleep(Duration::from_millis(10));
