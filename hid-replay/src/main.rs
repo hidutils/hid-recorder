@@ -114,6 +114,21 @@ fn hid_replay() -> Result<()> {
 
     let recording = parse(&cli.recording)?;
 
+    println!(
+        "Device {:04X}:{:04X}:{:04X} - {}",
+        recording.ids.0, recording.ids.1, recording.ids.2, recording.name
+    );
+
+    if let Some(last_event) = recording.events.last() {
+        let secs = last_event.usecs / 1_000_000;
+        println!(
+            "Recording is {secs}s long ({} HID reports).",
+            recording.events.len()
+        );
+    } else {
+        println!("This recording has no events!");
+    }
+
     let bus = match recording.ids.0 {
         1 => Bus::PCI,
         2 => Bus::ISAPNP,
