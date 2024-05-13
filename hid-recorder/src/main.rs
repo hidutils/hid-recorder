@@ -502,6 +502,20 @@ fn parse(stream: &mut impl Write, path: &Path) -> Result<ReportDescriptor> {
     Ok(rdesc)
 }
 
+fn get_hut_str(usage: &Usage) -> String {
+    let up: u16 = usage.usage_page.into();
+    let uid: u16 = usage.usage_id.into();
+    if let Ok(hut) = hut::Usage::new_from_page_and_id(up, uid) {
+        format!("{hut}")
+    } else {
+        format!(
+            "{:04x}/{:04x}",
+            u16::from(usage.usage_page),
+            u16::from(usage.usage_id)
+        )
+    }
+}
+
 fn print_field_values(stream: &mut impl Write, bytes: &[u8], field: &Field) {
     match field {
         Field::Constant(_) => {
@@ -514,17 +528,7 @@ fn print_field_values(stream: &mut impl Write, bytes: &[u8], field: &Field) {
         }
         Field::Variable(var) => {
             let v = var.extract_i32(bytes).unwrap();
-            let u = var.usage;
-            let hut = hut::Usage::try_from(u32::from(&u));
-            let hutstr = if let Ok(hut) = hut {
-                format!("{hut}")
-            } else {
-                format!(
-                    "{:04x}/{:04x}",
-                    u16::from(u.usage_page),
-                    u16::from(u.usage_id)
-                )
-            };
+            let hutstr = get_hut_str(&var.usage);
             cprint!(stream, Styles::None, "{}: {:5} | ", hutstr, v);
         }
         Field::Array(arr) => {
@@ -545,18 +549,7 @@ fn print_field_values(stream: &mut impl Write, bytes: &[u8], field: &Field) {
                     };
                     // Usage within range?
                     if let Some(usage) = usage_range.lookup_usage(&usage) {
-                        let hutstr = if let Ok(hut) = hut::Usage::new_from_page_and_id(
-                            u16::from(usage.usage_page),
-                            u16::from(usage.usage_id),
-                        ) {
-                            format!("{hut}")
-                        } else {
-                            format!(
-                                "{:04x}/{:04x}",
-                                u16::from(usage.usage_page),
-                                u16::from(usage.usage_id)
-                            )
-                        };
+                        let hutstr = get_hut_str(usage);
                         cprint!(stream, Styles::None, "{}: {:5} | ", hutstr, v);
                     } else {
                         // Let's just print the value as-is
@@ -565,20 +558,7 @@ fn print_field_values(stream: &mut impl Write, bytes: &[u8], field: &Field) {
                 });
             } else {
                 let hutstr = match arr.usages().first() {
-                    Some(usage) => {
-                        if let Ok(hut) = hut::Usage::new_from_page_and_id(
-                            u16::from(usage.usage_page),
-                            u16::from(usage.usage_id),
-                        ) {
-                            format!("{hut}")
-                        } else {
-                            format!(
-                                "{:04x}/{:04x}",
-                                u16::from(usage.usage_page),
-                                u16::from(usage.usage_id)
-                            )
-                        }
-                    }
+                    Some(usage) => get_hut_str(usage),
                     None => "<unknown>".to_string(),
                 };
                 cprint!(
