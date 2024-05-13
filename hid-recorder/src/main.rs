@@ -17,8 +17,8 @@ use hidreport::hid::{
     CollectionItem, GlobalItem, Item, ItemType, LocalItem, MainDataItem, MainItem,
     ReportDescriptorItems,
 };
-use hidreport::hut;
 use hidreport::*;
+use hut;
 
 enum Styles {
     None,
@@ -161,7 +161,7 @@ fn fmt_main_item(item: &MainItem) -> String {
 fn fmt_global_item(item: &GlobalItem) -> String {
     match item {
         GlobalItem::UsagePage { usage_page } => {
-            let up = hut::UsagePage::try_from(usage_page);
+            let up = hut::UsagePage::try_from(u16::from(usage_page));
             let str = match up {
                 Ok(up) => format!("{up}"),
                 Err(_) => format!("{usage_page}"),
@@ -194,10 +194,10 @@ fn fmt_local_item(item: &LocalItem, global_usage_page: &UsagePage) -> String {
                 Some(up) => up,
                 None => global_usage_page,
             };
-            let hut = hut::UsagePage::try_from(up);
+            let hut = hut::UsagePage::try_from(u16::from(up));
             let str = match hut {
                 Ok(hut) => {
-                    let u = hut.to_usage(usage_id);
+                    let u = hut.to_usage(u16::from(usage_id));
                     match u {
                         Ok(u) => format!("{u}"),
                         Err(_) => format!("{usage_id}"),
@@ -326,7 +326,10 @@ fn print_report(stream: &mut impl Write, r: &impl Report) {
                 cprint!(stream, Styles::None, "{:60} |", "######### Padding");
             }
             Field::Variable(v) => {
-                let hutstr: String = match hut::Usage::try_from(&v.usage) {
+                let hutstr: String = match hut::Usage::new_from_page_and_id(
+                    u16::from(v.usage.usage_page),
+                    u16::from(v.usage.usage_id),
+                ) {
                     Err(_) => "<unknown>".into(),
                     Ok(u) => format!("{} / {}", hut::UsagePage::from(&u), u),
                 };
@@ -363,7 +366,10 @@ fn print_report(stream: &mut impl Write, r: &impl Report) {
             Field::Array(a) => {
                 cprint!(stream, Styles::None, "Usages:");
                 a.usages().iter().for_each(|u| {
-                    let hutstr: String = match hut::Usage::try_from(u) {
+                    let hutstr: String = match hut::Usage::new_from_page_and_id(
+                        u16::from(u.usage_page),
+                        u16::from(u.usage_id),
+                    ) {
                         Err(_) => "<unknown>".into(),
                         Ok(u) => format!("{} / {}", hut::UsagePage::from(&u), u),
                     };
@@ -505,7 +511,7 @@ fn print_field_values(stream: &mut impl Write, bytes: &[u8], field: &Field) {
         Field::Variable(var) => {
             let v = var.extract_i32(bytes).unwrap();
             let u = var.usage;
-            let hut = hut::Usage::try_from(&u);
+            let hut = hut::Usage::try_from(u32::from(&u));
             let hutstr = if let Ok(hut) = hut {
                 format!("{hut}")
             } else {
@@ -535,7 +541,10 @@ fn print_field_values(stream: &mut impl Write, bytes: &[u8], field: &Field) {
                     };
                     // Usage within range?
                     if let Some(usage) = usage_range.lookup_usage(&usage) {
-                        let hutstr = if let Ok(hut) = hut::Usage::try_from(usage) {
+                        let hutstr = if let Ok(hut) = hut::Usage::new_from_page_and_id(
+                            u16::from(usage.usage_page),
+                            u16::from(usage.usage_id),
+                        ) {
                             format!("{hut}")
                         } else {
                             format!(
@@ -553,7 +562,10 @@ fn print_field_values(stream: &mut impl Write, bytes: &[u8], field: &Field) {
             } else {
                 let hutstr = match arr.usages().first() {
                     Some(usage) => {
-                        if let Ok(hut) = hut::Usage::try_from(usage) {
+                        if let Ok(hut) = hut::Usage::new_from_page_and_id(
+                            u16::from(usage.usage_page),
+                            u16::from(usage.usage_id),
+                        ) {
                             format!("{hut}")
                         } else {
                             format!(

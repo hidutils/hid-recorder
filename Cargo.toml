@@ -3,5 +3,5 @@ resolver = "2"
 members = [
     "hidreport",
     "hid-recorder",
-    "hid-replay",
+    "hid-replay", "hut",
 ]
