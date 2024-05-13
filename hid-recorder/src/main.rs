@@ -527,9 +527,14 @@ fn print_field_values(stream: &mut impl Write, bytes: &[u8], field: &Field) {
             );
         }
         Field::Variable(var) => {
-            let v = var.extract_i32(bytes).unwrap();
             let hutstr = get_hut_str(&var.usage);
-            cprint!(stream, Styles::None, "{}: {:5} | ", hutstr, v);
+            if var.is_signed() {
+                let v = var.extract_i32(bytes).unwrap();
+                cprint!(stream, Styles::None, "{}: {:5} | ", hutstr, v);
+            } else {
+                let v = var.extract_u32(bytes).unwrap();
+                cprint!(stream, Styles::None, "{}: {:5} | ", hutstr, v);
+            }
         }
         Field::Array(arr) => {
             // The values in the array are usage values between usage min/max
