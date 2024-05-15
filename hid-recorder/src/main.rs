@@ -18,7 +18,6 @@ use hidreport::hid::{
     ReportDescriptorItems,
 };
 use hidreport::*;
-use hut;
 
 enum Styles {
     None,
