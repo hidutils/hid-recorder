@@ -176,7 +176,7 @@ fn fmt_global_item(item: &GlobalItem) -> String {
         GlobalItem::Unit { unit } => format!(
             "Unit ({:?}:{:?})",
             unit.system(),
-            unit.units().or(Some(vec![])).unwrap()
+            unit.units().unwrap_or(vec![])
         ),
         GlobalItem::ReportSize { size } => format!("Report Size ({size})"),
         GlobalItem::ReportId { id } => format!("Report ID ({id})"),
