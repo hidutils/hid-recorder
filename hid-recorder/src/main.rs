@@ -705,8 +705,6 @@ fn read_events(stream: &mut impl Write, path: &Path, rdesc: &ReportDescriptor) -
             };
         }
     }
-
-    Ok(())
 }
 
 fn find_device() -> Result<PathBuf> {
