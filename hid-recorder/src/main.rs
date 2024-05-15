@@ -722,7 +722,8 @@ fn find_device() -> Result<PathBuf> {
     for file in hidraws {
         let uevent_path = PathBuf::from(format!("/sys/class/hidraw/{}/device/", file));
         let (name, _) = parse_uevent(&uevent_path)?;
-        eprintln!("/dev/{}:    {name}", file);
+        let devnode = format!("/dev/{file}:");
+        eprintln!("{devnode:14}    {name}");
     }
 
     eprint!("Select the device event number [0-9]: ");
