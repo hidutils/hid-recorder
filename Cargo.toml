@@ -2,6 +2,10 @@
 name = "hid-recorder"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+homepage = "https://github.com/hidutils"
+repository = "https://github.com/hidutils/hid-recorder"
+description = "HID Report recorder utility"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
