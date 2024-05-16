@@ -1,6 +1,0 @@
-[submodule "hidreport"]
-	path = hidreport
-	url = https://gitlab.freedesktop.org/whot/hidreport.git
-[submodule "hut"]
-	path = hut
-	url = https://gitlab.freedesktop.org/whot/hut.git
