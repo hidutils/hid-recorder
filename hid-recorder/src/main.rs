@@ -707,7 +707,7 @@ fn read_events(stream: &mut impl Write, path: &Path, rdesc: &ReportDescriptor) -
 }
 
 fn find_device() -> Result<PathBuf> {
-    eprintln!("Available devices:");
+    eprintln!("# Available devices:");
     let mut hidraws: Vec<String> = std::fs::read_dir("/dev/")?
         .flatten()
         .flat_map(|f| f.file_name().into_string())
@@ -720,10 +720,10 @@ fn find_device() -> Result<PathBuf> {
         let uevent_path = PathBuf::from(format!("/sys/class/hidraw/{}/device/", file));
         let (name, _) = parse_uevent(&uevent_path)?;
         let devnode = format!("/dev/{file}:");
-        eprintln!("{devnode:14}    {name}");
+        eprintln!("# {devnode:14}    {name}");
     }
 
-    eprint!("Select the device event number [0-9]: ");
+    eprint!("# Select the device event number [0-9]: ");
     std::io::stdout().flush().unwrap();
     let mut buffer = String::new();
     std::io::stdin().read_line(&mut buffer)?;
