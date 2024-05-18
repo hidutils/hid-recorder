@@ -84,6 +84,14 @@ struct Cli {
     path: Option<PathBuf>,
 }
 
+struct RDescFile {
+    path: PathBuf,
+    name: Option<String>,
+    bustype: u32,
+    vid: u32,
+    pid: u32,
+}
+
 fn fmt_main_item(item: &MainItem) -> String {
     match item {
         MainItem::Input(i) => {
@@ -468,7 +476,7 @@ fn parse_uevent(sysfs: &Path) -> Result<(String, (u32, u32, u32))> {
     Ok((name.to_string(), (bustype, vid, pid)))
 }
 
-fn parse(stream: &mut impl Write, path: &Path) -> Result<ReportDescriptor> {
+fn find_rdesc(path: &Path) -> Result<RDescFile> {
     let sysfs = find_sysfs_path(path)?;
     let rdesc_path = sysfs.join("report_descriptor");
     if !rdesc_path.exists() {
@@ -478,8 +486,25 @@ fn parse(stream: &mut impl Write, path: &Path) -> Result<ReportDescriptor> {
     let (name, ids) = parse_uevent(&sysfs)?;
     let (bustype, vid, pid) = ids;
 
+    Ok(RDescFile {
+        path: rdesc_path,
+        name: Some(name),
+        bustype,
+        vid,
+        pid,
+    })
+}
+
+fn parse(stream: &mut impl Write, rdesc: &RDescFile) -> Result<ReportDescriptor> {
+    let name = if let Some(name) = &rdesc.name {
+        name.clone()
+    } else {
+        String::from("unknown")
+    };
+    let (bustype, vid, pid) = (rdesc.bustype, rdesc.vid, rdesc.pid);
+
     cprintln!(stream, Styles::None, "# {name}");
-    let bytes = std::fs::read(rdesc_path)?;
+    let bytes = std::fs::read(&rdesc.path)?;
     cprintln!(
         stream,
         Styles::None,
@@ -790,7 +815,8 @@ fn hid_recorder() -> Result<()> {
         None => find_device()?,
     };
 
-    let rdesc = parse(&mut stream, &path)?;
+    let rdesc_file = find_rdesc(&path)?;
+    let rdesc = parse(&mut stream, &rdesc_file)?;
     if path.starts_with("/dev") {
         read_events(&mut stream, &path, &rdesc)?
     }
