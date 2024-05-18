@@ -454,6 +454,12 @@ fn parse(stream: &mut impl Write, path: &Path) -> Result<ReportDescriptor> {
 
     cprintln!(stream, Styles::None, "# {name}");
     let bytes = std::fs::read(rdesc_path)?;
+    cprintln!(
+        stream,
+        Styles::None,
+        "# Report descriptor length: {} bytes",
+        bytes.len()
+    );
     parse_rdesc(stream, &bytes)?;
 
     // Print the readable fields
