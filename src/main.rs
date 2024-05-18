@@ -80,7 +80,7 @@ struct Cli {
     #[arg(long, default_value_t = ("-").to_string())]
     output_file: String,
 
-    /// Path to the hidraw device node
+    /// Path to the hidraw or event device node
     path: Option<PathBuf>,
 }
 
@@ -276,10 +276,35 @@ fn parse_rdesc(stream: &mut impl Write, bytes: &[u8]) -> Result<()> {
 
 // This would be easier with udev but let's keep the dependencies relatively minimal.
 fn find_sysfs_path(path: &Path) -> Result<PathBuf> {
-    let sysfs = if path.starts_with("/dev/") {
-        PathBuf::from("/sys/class/hidraw/")
+    let pathstr = path.to_string_lossy();
+    let sysfs: PathBuf;
+    if pathstr.starts_with("/dev/hidraw") {
+        sysfs = PathBuf::from("/sys/class/hidraw/")
+            .join(path.file_name().unwrap())
+            .join("device");
+    } else if pathstr.starts_with("/dev/input/event") {
+        // /sys/class/input/event0/device/device/hidraw/hidraw4/device/
+        let parent = PathBuf::from("/sys/class/input/")
             .join(path.file_name().unwrap())
             .join("device")
+            .join("device")
+            .join("hidraw");
+        if !parent.exists() {
+            bail!("Couldn't find a  hidraw device for this event node, please use /dev/hidraw* instead");
+        }
+        let hidraws: Vec<String> = std::fs::read_dir(&parent)?
+            .flatten()
+            .flat_map(|f| f.file_name().into_string())
+            .filter(|name| name.starts_with("hidraw"))
+            .collect();
+        if hidraws.is_empty() {
+            bail!("Couldn't find a  hidraw device for this event node, please use /dev/hidraw* instead");
+        } else if hidraws.len() > 1 {
+            bail!(
+                "More than one hidraw device for this event node, please use /dev/hidraw* instead"
+            );
+        }
+        sysfs = parent.join(hidraws.first().unwrap()).join("device");
     } else if path.starts_with("/sys") {
         let path = path.canonicalize()?;
         let path = if !path.is_dir() {
@@ -290,9 +315,10 @@ fn find_sysfs_path(path: &Path) -> Result<PathBuf> {
         // We're now somewhere in one of
         // in /sys/devices/pci0000:00/0000:00:14.0/usb1/1-9/1-9:1.2/0003:046D:C52B.0003/hidraw/hidraw0
         // Go up the HID device root
-        path.components()
+        sysfs = path
+            .components()
             .take_while(|c| !c.as_os_str().to_string_lossy().starts_with("hidraw"))
-            .collect()
+            .collect();
     } else {
         bail!("Don't know how to handle {path:?}");
     };
