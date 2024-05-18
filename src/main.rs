@@ -80,7 +80,8 @@ struct Cli {
     #[arg(long, default_value_t = ("-").to_string())]
     output_file: String,
 
-    /// Path to the hidraw or event device node
+    /// Path to the hidraw or event device node, or a binary
+    /// hid descriptor file
     path: Option<PathBuf>,
 }
 
@@ -477,22 +478,37 @@ fn parse_uevent(sysfs: &Path) -> Result<(String, (u32, u32, u32))> {
 }
 
 fn find_rdesc(path: &Path) -> Result<RDescFile> {
-    let sysfs = find_sysfs_path(path)?;
-    let rdesc_path = sysfs.join("report_descriptor");
-    if !rdesc_path.exists() {
-        bail!("Unable to find report descriptor at {rdesc_path:?}");
+    if vec!["/dev", "/sys"]
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
+    {
+        let sysfs = find_sysfs_path(path)?;
+        let rdesc_path = sysfs.join("report_descriptor");
+        if !rdesc_path.exists() {
+            bail!("Unable to find report descriptor at {rdesc_path:?}");
+        }
+
+        let (name, ids) = parse_uevent(&sysfs)?;
+        let (bustype, vid, pid) = ids;
+
+        Ok(RDescFile {
+            path: rdesc_path,
+            name: Some(name),
+            bustype,
+            vid,
+            pid,
+        })
+    } else {
+        // If it's a file, let's assume it's a binary rdesc file like
+        // the report_descriptor file.
+        Ok(RDescFile {
+            path: path.into(),
+            name: None,
+            bustype: 0,
+            vid: 0,
+            pid: 0,
+        })
     }
-
-    let (name, ids) = parse_uevent(&sysfs)?;
-    let (bustype, vid, pid) = ids;
-
-    Ok(RDescFile {
-        path: rdesc_path,
-        name: Some(name),
-        bustype,
-        vid,
-        pid,
-    })
 }
 
 fn parse(stream: &mut impl Write, rdesc: &RDescFile) -> Result<ReportDescriptor> {
@@ -830,6 +846,61 @@ fn main() -> ExitCode {
         Err(e) => {
             eprintln!("Error: {e:#}");
             ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_hidraw() {
+        let hidraws: Vec<String> = std::fs::read_dir("/dev/")
+            .unwrap()
+            .flatten()
+            .flat_map(|f| f.file_name().into_string())
+            .filter(|name| name.starts_with("hidraw"))
+            .collect();
+        for hidraw in hidraws.iter().map(|h| PathBuf::from("/dev/").join(h)) {
+            let result = find_rdesc(&hidraw);
+            assert!(result.is_ok());
+        }
+    }
+
+    #[test]
+    fn test_find_event_node() {
+        let evdevs: Vec<String> = std::fs::read_dir("/dev/input")
+            .unwrap()
+            .flatten()
+            .flat_map(|f| f.file_name().into_string())
+            .filter(|name| name.starts_with("event"))
+            .collect();
+        if !evdevs.is_empty() {
+            assert!(evdevs
+                .iter()
+                .map(|n| PathBuf::from("/dev/input").join(n))
+                .any(|evdev| find_rdesc(&evdev).is_ok()));
+        }
+    }
+
+    // Make sure we can always parse the devices currently plugged into
+    // this machine.
+    #[test]
+    fn test_parse_local_hid_reports() {
+        let hidraws: Vec<String> = std::fs::read_dir("/dev/")
+            .unwrap()
+            .flatten()
+            .flat_map(|f| f.file_name().into_string())
+            .filter(|name| name.starts_with("hidraw"))
+            .collect();
+        for rdesc_file in hidraws
+            .iter()
+            .map(|h| PathBuf::from("/dev/").join(h))
+            .map(|path| find_rdesc(&path).unwrap())
+        {
+            let mut buf = std::io::BufWriter::new(Vec::new());
+            parse(&mut buf, &rdesc_file).expect(&format!("Failed to parse {:?}", rdesc_file.path));
         }
     }
 }
