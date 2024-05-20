@@ -22,7 +22,7 @@ events from the device)
 
 For use-cases where you need to record events (HID Reports) hid-recorder
 needs read access to the respective `/dev/hidraw` device. Typically this
-means you need to run as root. The easiest way is to run through `pkexe`
+means you need to run as root. The easiest way is to run through `pkexec`
 which will ask for your user's password:
 
 ```
