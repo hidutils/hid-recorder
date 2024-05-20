@@ -870,6 +870,11 @@ mod tests {
 
     #[test]
     fn test_find_event_node() {
+        // We can't assume any local event nodes, and even where we have them
+        // they're not backed by HID devices.
+        if std::env::var("CI").is_ok() {
+            return;
+        }
         let evdevs: Vec<String> = std::fs::read_dir("/dev/input")
             .unwrap()
             .flatten()
