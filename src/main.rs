@@ -38,7 +38,7 @@ impl Styles {
             Styles::InputItem => Style::new().green().bold(),
             Styles::OutputItem => Style::new().yellow().bold(),
             Styles::FeatureItem => Style::new().blue().bold(),
-            Styles::ReportId => Style::new().magenta(),
+            Styles::ReportId => Style::new().magenta().bold(),
             Styles::Separator => Style::new().magenta(),
             Styles::Timestamp => Style::new().purple(),
         }
