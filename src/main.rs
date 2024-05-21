@@ -600,12 +600,28 @@ fn print_field_values(stream: &mut impl Write, bytes: &[u8], field: &Field) {
         }
         Field::Variable(var) => {
             let hutstr = get_hut_str(&var.usage);
-            if var.is_signed() {
-                let v = var.extract_i32(bytes).unwrap();
-                cprint!(stream, Styles::None, "{}: {:5} | ", hutstr, v);
+            if var.bits.end() - var.bits.start() <= 32 {
+                if var.is_signed() {
+                    let v = var.extract_i32(bytes).unwrap();
+                    cprint!(stream, Styles::None, "{}: {:5} | ", hutstr, v);
+                } else {
+                    let v = var.extract_u32(bytes).unwrap();
+                    cprint!(stream, Styles::None, "{}: {:5} | ", hutstr, v);
+                }
             } else {
-                let v = var.extract_u32(bytes).unwrap();
-                cprint!(stream, Styles::None, "{}: {:5} | ", hutstr, v);
+                // FIXME: output is not correct if start/end doesn't align with byte
+                // boundaries
+                let data = &bytes[var.bits.start() / 8..var.bits.end() / 8];
+                cprint!(
+                    stream,
+                    Styles::None,
+                    "{}: {} | ",
+                    hutstr,
+                    data.iter()
+                        .map(|v| format!("{v:02x}"))
+                        .collect::<Vec<String>>()
+                        .join(" ")
+                );
             }
         }
         Field::Array(arr) => {
