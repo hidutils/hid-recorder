@@ -162,17 +162,18 @@ fn fmt_main_item(item: &MainItem) -> String {
                 CollectionItem::VendorDefined { .. } => "VendorDefined",
             },
         ),
-        MainItem::EndCollection => "EndCollection".into(),
+        MainItem::EndCollection => "End Collection".into(),
     }
 }
 
 fn fmt_global_item(item: &GlobalItem) -> String {
     match item {
         GlobalItem::UsagePage { usage_page } => {
-            let up = hut::UsagePage::try_from(u16::from(usage_page));
+            let upval = u16::from(usage_page);
+            let up = hut::UsagePage::try_from(upval);
             let str = match up {
                 Ok(up) => format!("{up}"),
-                Err(_) => format!("{usage_page}"),
+                Err(_) => format!("Usage Page ({upval:04X})"),
             };
 
             format!("Usage Page ({str})")
@@ -181,7 +182,7 @@ fn fmt_global_item(item: &GlobalItem) -> String {
         GlobalItem::LogicalMaximum { maximum } => format!("Logical Maximum ({maximum})"),
         GlobalItem::PhysicalMinimum { minimum } => format!("Physical Minimum ({minimum})"),
         GlobalItem::PhysicalMaximum { maximum } => format!("Physical Maximum ({maximum})"),
-        GlobalItem::UnitExponent { exponent } => format!("Exponent ({})", exponent.exponent()),
+        GlobalItem::UnitExponent { exponent } => format!("Unit Exponent ({})", exponent.exponent()),
         GlobalItem::Unit { unit } => format!(
             "Unit ({:?}:{:?})",
             unit.system(),
@@ -209,10 +210,11 @@ fn fmt_local_item(item: &LocalItem, global_usage_page: &UsagePage) -> String {
             let hut = hut::UsagePage::try_from(u16::from(up));
             let str = match hut {
                 Ok(hut) => {
-                    let u = hut.to_usage(u16::from(usage_id));
+                    let uidval = u16::from(usage_id);
+                    let u = hut.to_usage(uidval);
                     match u {
                         Ok(u) => format!("{u}"),
-                        Err(_) => format!("{usage_id}"),
+                        Err(_) => format!("{uidval:04X}"),
                     }
                 }
                 Err(_) => format!("{usage_id}"),
@@ -253,7 +255,7 @@ fn parse_rdesc(stream: &mut impl Write, bytes: &[u8]) -> Result<()> {
         let bytes = item
             .bytes()
             .iter()
-            .map(|b| format!("{b:02x}, "))
+            .map(|b| format!("0x{b:02x}, "))
             .collect::<Vec<String>>()
             .join("");
 
