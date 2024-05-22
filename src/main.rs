@@ -179,8 +179,8 @@ fn fmt_global_item(item: &GlobalItem) -> String {
         }
         GlobalItem::LogicalMinimum { minimum } => format!("Logical Minimum ({minimum})"),
         GlobalItem::LogicalMaximum { maximum } => format!("Logical Maximum ({maximum})"),
-        GlobalItem::PhysicalMinimum { minimum } => format!("Physical Maximum ({minimum})"),
-        GlobalItem::PhysicalMaximum { maximum } => format!("Physical Minimum ({maximum})"),
+        GlobalItem::PhysicalMinimum { minimum } => format!("Physical Minimum ({minimum})"),
+        GlobalItem::PhysicalMaximum { maximum } => format!("Physical Maximum ({maximum})"),
         GlobalItem::UnitExponent { exponent } => format!("Exponent ({})", exponent.exponent()),
         GlobalItem::Unit { unit } => format!(
             "Unit ({:?}:{:?})",
