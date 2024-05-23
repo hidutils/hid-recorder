@@ -193,9 +193,12 @@ fn fmt_global_item(item: &GlobalItem) -> String {
         GlobalItem::PhysicalMaximum { maximum } => format!("Physical Maximum ({maximum})"),
         GlobalItem::UnitExponent { exponent } => format!("Unit Exponent ({})", exponent.exponent()),
         GlobalItem::Unit { unit } => format!(
-            "Unit ({:?}:{:?})",
+            "Unit ({:?}{}{unit})",
             unit.system(),
-            unit.units().unwrap_or(vec![])
+            match unit.system() {
+                UnitSystem::None => "",
+                _ => ": ",
+            }
         ),
         GlobalItem::ReportSize { size } => format!("Report Size ({size})"),
         GlobalItem::ReportId { id } => format!("Report ID ({id})"),

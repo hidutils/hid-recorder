@@ -16,5 +16,5 @@ libc = "0.2.153"
 nix = { version = "0.28.0", features = ["poll"] }
 owo-colors = { version = "4.0.0", features = ["supports-colors"] }
 chrono = "0.4.38"
-hidreport = "0.2.1"
+hidreport = "0.3.0"
 hut = "0.2.0"
