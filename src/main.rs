@@ -514,6 +514,10 @@ fn find_rdesc(path: &Path) -> Result<RDescFile> {
 }
 
 fn parse(stream: &mut impl Write, rdesc: &RDescFile) -> Result<ReportDescriptor> {
+    let bytes = std::fs::read(&rdesc.path)?;
+    if bytes.is_empty() {
+        bail!("Empty report descriptor");
+    }
     let name = if let Some(name) = &rdesc.name {
         name.clone()
     } else {
@@ -522,7 +526,6 @@ fn parse(stream: &mut impl Write, rdesc: &RDescFile) -> Result<ReportDescriptor>
     let (bustype, vid, pid) = (rdesc.bustype, rdesc.vid, rdesc.pid);
 
     cprintln!(stream, Styles::None, "# {name}");
-    let bytes = std::fs::read(&rdesc.path)?;
     cprintln!(
         stream,
         Styles::None,
