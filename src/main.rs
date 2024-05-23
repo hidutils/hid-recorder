@@ -271,7 +271,7 @@ fn parse_rdesc(stream: &mut impl Write, bytes: &[u8]) -> Result<()> {
             ItemType::Global(GlobalItem::ReportId { .. }) => Styles::ReportId,
             _ => Styles::None,
         };
-        cprintln!(stream, style, "# {bytes:30} // {indented:40} {offset}");
+        cprintln!(stream, style, "# {bytes:30} // {indented:41} {offset}");
 
         match item.item_type() {
             ItemType::Main(MainItem::Collection(_)) => indent += 2,
