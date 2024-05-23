@@ -179,7 +179,16 @@ fn fmt_global_item(item: &GlobalItem) -> String {
             format!("Usage Page ({str})")
         }
         GlobalItem::LogicalMinimum { minimum } => format!("Logical Minimum ({minimum})"),
-        GlobalItem::LogicalMaximum { maximum } => format!("Logical Maximum ({maximum})"),
+        GlobalItem::LogicalMaximum { maximum } => {
+            // Special case -1 as maximum. It's common enough and never means -1 but
+            // we can only know this is we check the minimum for signed-ness.
+            let maximum: i32 = maximum.into();
+            if maximum == -1 {
+                format!("Logical Maximum ({})", maximum as u32)
+            } else {
+                format!("Logical Maximum ({maximum})")
+            }
+        }
         GlobalItem::PhysicalMinimum { minimum } => format!("Physical Minimum ({minimum})"),
         GlobalItem::PhysicalMaximum { maximum } => format!("Physical Maximum ({maximum})"),
         GlobalItem::UnitExponent { exponent } => format!("Unit Exponent ({})", exponent.exponent()),
