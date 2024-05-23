@@ -173,7 +173,7 @@ fn fmt_global_item(item: &GlobalItem) -> String {
             let up = hut::UsagePage::try_from(upval);
             let str = match up {
                 Ok(up) => format!("{up}"),
-                Err(_) => format!("Usage Page ({upval:04X})"),
+                Err(_) => format!("Usage Page (0x{upval:04X})"),
             };
 
             format!("Usage Page ({str})")
@@ -226,10 +226,10 @@ fn fmt_local_item(item: &LocalItem, global_usage_page: &UsagePage) -> String {
                     let u = hut.to_usage(uidval);
                     match u {
                         Ok(u) => format!("{u}"),
-                        Err(_) => format!("{uidval:04X}"),
+                        Err(_) => format!("0x{uidval:04X}"),
                     }
                 }
-                Err(_) => format!("{usage_id}"),
+                Err(_) => format!("0x{:04x}", u16::from(usage_id)),
             };
             format!("Usage ({str})")
         }
