@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 use anyhow::{bail, Context, Result};
-use clap::{Parser, ValueEnum};
+use clap::{ColorChoice, Parser};
 use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
 use owo_colors::{OwoColorize, Stream::Stdout, Style};
 use std::collections::HashSet;
@@ -60,13 +60,6 @@ macro_rules! cprint {
     }};
 }
 
-#[derive(ValueEnum, Clone, Debug)]
-enum ClapColorArg {
-    Auto,
-    Never,
-    Always,
-}
-
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -74,8 +67,8 @@ struct Cli {
     #[arg(short, long, default_value_t = false)]
     debug: bool,
 
-    #[arg(long, value_enum, default_value_t = ClapColorArg::Auto)]
-    color: ClapColorArg,
+    #[arg(long, value_enum, default_value_t = ColorChoice::Auto)]
+    color: ColorChoice,
 
     #[arg(long, default_value_t = ("-").to_string())]
     output_file: String,
@@ -885,9 +878,9 @@ fn hid_recorder() -> Result<()> {
     let mut stream: Box<dyn Write> = if cli.output_file == "-" {
         // Bit lame but easier to just set the env for owo_colors to figure out the rest
         match cli.color {
-            ClapColorArg::Never => std::env::set_var("NO_COLOR", "1"),
-            ClapColorArg::Auto => {}
-            ClapColorArg::Always => std::env::set_var("FORCE_COLOR", "1"),
+            ColorChoice::Never => std::env::set_var("NO_COLOR", "1"),
+            ColorChoice::Auto => {}
+            ColorChoice::Always => std::env::set_var("FORCE_COLOR", "1"),
         }
 
         Box::new(std::io::stdout())
