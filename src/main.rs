@@ -366,13 +366,22 @@ fn print_report(stream: &mut impl Write, r: &impl Report) {
         r.size_in_bits()
     );
     for field in r.fields().iter() {
-        cprint!(
-            stream,
-            Styles::None,
-            "#  |   Bits: {:3} -> {:3} | ",
-            field.bits().start(),
-            field.bits().end()
-        );
+        if field.bits().start() != field.bits().end() {
+            cprint!(
+                stream,
+                Styles::None,
+                "#  |   Bits: {:3} -> {:3} | ",
+                field.bits().start(),
+                field.bits().end()
+            );
+        } else {
+            cprint!(
+                stream,
+                Styles::None,
+                "#  |   Bit:  {:3}        | ",
+                field.bits().start(),
+            );
+        }
         match field {
             Field::Constant(_c) => {
                 cprint!(stream, Styles::None, "{:60} |", "######### Padding");
