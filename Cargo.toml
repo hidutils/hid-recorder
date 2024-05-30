@@ -18,3 +18,4 @@ owo-colors = { version = "4.0.0", features = ["supports-colors"] }
 chrono = "0.4.38"
 hidreport = "0.3.0"
 hut = "0.2.0"
+human-sort = "0.2.2"

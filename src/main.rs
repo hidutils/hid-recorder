@@ -820,7 +820,7 @@ fn find_device() -> Result<PathBuf> {
         .filter(|name| name.starts_with("hidraw"))
         .collect();
 
-    hidraws.sort();
+    hidraws.sort_by(|a, b| human_sort::compare(a, b));
 
     for file in hidraws {
         let uevent_path = PathBuf::from(format!("/sys/class/hidraw/{}/device/", file));
