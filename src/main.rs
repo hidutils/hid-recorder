@@ -370,7 +370,7 @@ fn print_report(stream: &mut impl Write, r: &impl Report) {
             cprint!(
                 stream,
                 Styles::None,
-                "#  |   Bits: {:3} -> {:3} | ",
+                "#  |   Bits: {:3}..={:<3} | ",
                 field.bits().start(),
                 field.bits().end()
             );
@@ -378,7 +378,7 @@ fn print_report(stream: &mut impl Write, r: &impl Report) {
             cprint!(
                 stream,
                 Styles::None,
-                "#  |   Bit:  {:3}        | ",
+                "#  |   Bit:  {:3}       | ",
                 field.bits().start(),
             );
         }
@@ -405,7 +405,7 @@ fn print_report(stream: &mut impl Write, r: &impl Report) {
                 cprint!(
                     stream,
                     Styles::None,
-                    "Logical Range: {:5}->{:5} | ",
+                    "Logical Range: {:5}..={:<5} | ",
                     i32::from(v.logical_minimum),
                     i32::from(v.logical_maximum)
                 );
@@ -413,7 +413,7 @@ fn print_report(stream: &mut impl Write, r: &impl Report) {
                     cprint!(
                         stream,
                         Styles::None,
-                        "Physical Range: {:5}->{:5} | ",
+                        "Physical Range: {:5}..={:<5} | ",
                         i32::from(min),
                         i32::from(max)
                     );
@@ -446,7 +446,7 @@ fn print_report(stream: &mut impl Write, r: &impl Report) {
                 cprint!(
                     stream,
                     Styles::None,
-                    "| Logical Range: {:5}->{:5} | ",
+                    "| Logical Range: {:5}..={:<5} | ",
                     i32::from(a.logical_minimum),
                     i32::from(a.logical_maximum)
                 );
@@ -454,7 +454,7 @@ fn print_report(stream: &mut impl Write, r: &impl Report) {
                     cprint!(
                         stream,
                         Styles::None,
-                        "Physical Range: {:5}->{:5} | ",
+                        "Physical Range: {:5}..={:<5} | ",
                         i32::from(min),
                         i32::from(max)
                     );
