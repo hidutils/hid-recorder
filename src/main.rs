@@ -420,7 +420,21 @@ fn print_report(stream: &mut impl Write, r: &impl Report) {
                 };
                 if let Some(u) = v.unit {
                     if let Some(units) = u.units() {
-                        cprint!(stream, Styles::None, "Unit: {:?}: {:?}", u.system(), units);
+                        cprint!(
+                            stream,
+                            Styles::None,
+                            "Unit: {:?}{}{}",
+                            u.system(),
+                            match u.system() {
+                                UnitSystem::None => "",
+                                _ => ": ",
+                            },
+                            units
+                                .iter()
+                                .map(|u| format!("{u}"))
+                                .collect::<Vec<String>>()
+                                .join("")
+                        )
                     }
                 }
             }
@@ -461,7 +475,21 @@ fn print_report(stream: &mut impl Write, r: &impl Report) {
                 };
                 if let Some(u) = a.unit {
                     if let Some(units) = u.units() {
-                        cprint!(stream, Styles::None, "Unit: {:?}: {:?}", u.system(), units);
+                        cprint!(
+                            stream,
+                            Styles::None,
+                            "Unit: {:?}{}{}",
+                            u.system(),
+                            match u.system() {
+                                UnitSystem::None => "",
+                                _ => ": ",
+                            },
+                            units
+                                .iter()
+                                .map(|u| format!("{u}"))
+                                .collect::<Vec<String>>()
+                                .join("")
+                        )
                     }
                 }
             }
