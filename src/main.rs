@@ -359,20 +359,20 @@ fn print_report(stream: &mut impl Write, r: &impl Report) {
         r.size_in_bits()
     );
     for field in r.fields().iter() {
-        if field.bits().start() != field.bits().end() {
+        if field.bits().len() > 1 {
             cprint!(
                 stream,
                 Styles::None,
                 "#  |   Bits: {:3}..={:<3} | ",
-                field.bits().start(),
-                field.bits().end()
+                field.bits().start,
+                field.bits().end - 1
             );
         } else {
             cprint!(
                 stream,
                 Styles::None,
                 "#  |   Bit:  {:3}       | ",
-                field.bits().start(),
+                field.bits().start,
             );
         }
         match field {
@@ -647,7 +647,7 @@ fn print_field_values(stream: &mut impl Write, bytes: &[u8], field: &Field) {
         }
         Field::Variable(var) => {
             let hutstr = get_hut_str(&var.usage);
-            if var.bits.end() - var.bits.start() <= 32 {
+            if var.bits.len() <= 32 {
                 if var.is_signed() {
                     let v = var.extract_i32(bytes).unwrap();
                     cprint!(stream, Styles::None, "{}: {:5} | ", hutstr, v);
@@ -658,7 +658,7 @@ fn print_field_values(stream: &mut impl Write, bytes: &[u8], field: &Field) {
             } else {
                 // FIXME: output is not correct if start/end doesn't align with byte
                 // boundaries
-                let data = &bytes[var.bits.start() / 8..var.bits.end() / 8];
+                let data = &bytes[var.bits.start / 8..var.bits.end / 8];
                 cprint!(
                     stream,
                     Styles::None,
