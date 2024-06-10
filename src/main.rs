@@ -347,7 +347,7 @@ fn print_report(stream: &mut impl Write, r: &impl Report) {
     if r.report_id().is_some() {
         cprintln!(
             stream,
-            Styles::None,
+            Styles::ReportId,
             "# Report ID: {}",
             r.report_id().unwrap()
         );
