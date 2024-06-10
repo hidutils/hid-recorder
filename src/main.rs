@@ -28,6 +28,7 @@ enum Styles {
     Data,
     Separator,
     Timestamp,
+    Note,
 }
 
 impl Styles {
@@ -35,6 +36,7 @@ impl Styles {
         match self {
             Styles::None => Style::new(),
             Styles::Data => Style::new().red(),
+            Styles::Note => Style::new().red().bold(),
             Styles::InputItem => Style::new().green().bold(),
             Styles::OutputItem => Style::new().yellow().bold(),
             Styles::FeatureItem => Style::new().blue().bold(),
@@ -44,6 +46,8 @@ impl Styles {
         }
     }
 }
+
+const MAX_USAGES_DISPLAYED: usize = 5;
 
 // Usage: cprintln!(Sytles::Data, <normal println args>)
 macro_rules! cprintln {
@@ -67,6 +71,10 @@ struct Cli {
     #[arg(short, long, default_value_t = false)]
     debug: bool,
 
+    /// Do not shorten the output.
+    #[arg(short, long, default_value_t = false)]
+    full: bool,
+
     #[arg(long, value_enum, default_value_t = ColorChoice::Auto)]
     color: ColorChoice,
 
@@ -76,6 +84,10 @@ struct Cli {
     /// Path to the hidraw or event device node, or a binary
     /// hid descriptor file
     path: Option<PathBuf>,
+}
+
+struct Options {
+    full: bool,
 }
 
 struct RDescFile {
@@ -343,7 +355,7 @@ fn find_sysfs_path(path: &Path) -> Result<PathBuf> {
 }
 
 /// Print the parsed reports as an outline of how they look like
-fn print_report_summary(stream: &mut impl Write, r: &impl Report) {
+fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options) {
     if r.report_id().is_some() {
         cprintln!(
             stream,
@@ -433,7 +445,13 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report) {
             }
             Field::Array(a) => {
                 cprint!(stream, Styles::None, "Usages:");
-                a.usages().iter().for_each(|u| {
+                let usages = a.usages().iter();
+                let usages = if opts.full {
+                    usages.take(0xffffffff)
+                } else {
+                    usages.take(MAX_USAGES_DISPLAYED)
+                };
+                usages.for_each(|u| {
                     let hutstr: String = match hut::Usage::new_from_page_and_id(
                         u16::from(u.usage_page),
                         u16::from(u.usage_id),
@@ -450,6 +468,14 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report) {
                         hutstr
                     );
                 });
+                if !opts.full && a.usages().len() > MAX_USAGES_DISPLAYED {
+                    cprint!(
+                        stream,
+                        Styles::Note,
+                        "\n#                              {:55}",
+                        "... use --full to see all usages"
+                    );
+                }
                 cprint!(
                     stream,
                     Styles::None,
@@ -555,7 +581,7 @@ fn find_rdesc(path: &Path) -> Result<RDescFile> {
     }
 }
 
-fn parse(stream: &mut impl Write, rdesc: &RDescFile) -> Result<ReportDescriptor> {
+fn parse(stream: &mut impl Write, rdesc: &RDescFile, opts: &Options) -> Result<ReportDescriptor> {
     let bytes = std::fs::read(&rdesc.path)?;
     if bytes.is_empty() {
         bail!("Empty report descriptor");
@@ -592,7 +618,7 @@ fn parse(stream: &mut impl Write, rdesc: &RDescFile) -> Result<ReportDescriptor>
     if !input_reports.is_empty() {
         for r in rdesc.input_reports() {
             cprintln!(stream, Styles::InputItem, "# ------- Input Report ------- ");
-            print_report_summary(stream, r);
+            print_report_summary(stream, r, opts);
         }
     }
     let output_reports = rdesc.output_reports();
@@ -603,7 +629,7 @@ fn parse(stream: &mut impl Write, rdesc: &RDescFile) -> Result<ReportDescriptor>
                 Styles::OutputItem,
                 "# ------- Output Report ------- "
             );
-            print_report_summary(stream, r);
+            print_report_summary(stream, r, opts);
         }
     }
     let feature_reports = rdesc.feature_reports();
@@ -614,7 +640,7 @@ fn parse(stream: &mut impl Write, rdesc: &RDescFile) -> Result<ReportDescriptor>
                 Styles::FeatureItem,
                 "# ------- Feature Report ------- "
             );
-            print_report_summary(stream, r);
+            print_report_summary(stream, r, opts);
         }
     }
 
@@ -895,7 +921,9 @@ fn hid_recorder() -> Result<()> {
     };
 
     let rdesc_file = find_rdesc(&path)?;
-    let rdesc = parse(&mut stream, &rdesc_file)?;
+    let opts = Options { full: cli.full };
+
+    let rdesc = parse(&mut stream, &rdesc_file, &opts)?;
     if path.starts_with("/dev") {
         read_events(&mut stream, &path, &rdesc)?
     }
@@ -968,7 +996,9 @@ mod tests {
             .map(|path| find_rdesc(&path).unwrap())
         {
             let mut buf = std::io::BufWriter::new(Vec::new());
-            parse(&mut buf, &rdesc_file).expect(&format!("Failed to parse {:?}", rdesc_file.path));
+            let opts = Options { full: true };
+            parse(&mut buf, &rdesc_file, &opts)
+                .expect(&format!("Failed to parse {:?}", rdesc_file.path));
         }
     }
 }
