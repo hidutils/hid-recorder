@@ -248,7 +248,7 @@ fn fmt_item(item: &impl Item, usage_page: &UsagePage) -> String {
     }
 }
 
-fn parse_rdesc(stream: &mut impl Write, bytes: &[u8]) -> Result<()> {
+fn print_rdesc_items(stream: &mut impl Write, bytes: &[u8]) -> Result<()> {
     let rdesc_items = ReportDescriptorItems::try_from(bytes)?;
     let mut indent = 0;
     let mut current_usage_page = UsagePage::from(0u16); // Undefined
@@ -343,7 +343,7 @@ fn find_sysfs_path(path: &Path) -> Result<PathBuf> {
 }
 
 /// Print the parsed reports as an outline of how they look like
-fn print_report(stream: &mut impl Write, r: &impl Report) {
+fn print_report_summary(stream: &mut impl Write, r: &impl Report) {
     if r.report_id().is_some() {
         cprintln!(
             stream,
@@ -574,7 +574,7 @@ fn parse(stream: &mut impl Write, rdesc: &RDescFile) -> Result<ReportDescriptor>
         "# Report descriptor length: {} bytes",
         bytes.len()
     );
-    parse_rdesc(stream, &bytes)?;
+    print_rdesc_items(stream, &bytes)?;
 
     // Print the readable fields
     let bytestr = bytes
@@ -592,7 +592,7 @@ fn parse(stream: &mut impl Write, rdesc: &RDescFile) -> Result<ReportDescriptor>
     if !input_reports.is_empty() {
         for r in rdesc.input_reports() {
             cprintln!(stream, Styles::InputItem, "# ------- Input Report ------- ");
-            print_report(stream, r);
+            print_report_summary(stream, r);
         }
     }
     let output_reports = rdesc.output_reports();
@@ -603,7 +603,7 @@ fn parse(stream: &mut impl Write, rdesc: &RDescFile) -> Result<ReportDescriptor>
                 Styles::OutputItem,
                 "# ------- Output Report ------- "
             );
-            print_report(stream, r);
+            print_report_summary(stream, r);
         }
     }
     let feature_reports = rdesc.feature_reports();
@@ -614,7 +614,7 @@ fn parse(stream: &mut impl Write, rdesc: &RDescFile) -> Result<ReportDescriptor>
                 Styles::FeatureItem,
                 "# ------- Feature Report ------- "
             );
-            print_report(stream, r);
+            print_report_summary(stream, r);
         }
     }
 
@@ -713,7 +713,7 @@ fn print_field_values(stream: &mut impl Write, bytes: &[u8], field: &Field) {
     }
 }
 
-fn parse_report(
+fn parse_input_report(
     stream: &mut impl Write,
     bytes: &[u8],
     rdesc: &ReportDescriptor,
@@ -830,7 +830,7 @@ fn read_events(stream: &mut impl Write, path: &Path, rdesc: &ReportDescriptor) -
                         last_timestamp = Some(Instant::now());
                     }
 
-                    parse_report(stream, &data, rdesc, &start_time.unwrap())?;
+                    parse_input_report(stream, &data, rdesc, &start_time.unwrap())?;
                 }
                 Err(e) => {
                     if e.kind() != std::io::ErrorKind::WouldBlock {
