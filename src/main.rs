@@ -510,6 +510,33 @@ impl PrintableTable {
     }
 }
 
+fn is_vendor_or_reserved_field(field: &Field) -> bool {
+    match field {
+        Field::Constant(_) => false,
+        Field::Array(_) => false,
+        Field::Variable(v) => {
+            let up: u16 = v.usage.usage_page.into();
+            match hut::UsagePage::try_from(up) {
+                Err(_) => false,
+                Ok(hut::UsagePage::VendorDefinedPage { .. }) => true,
+                Ok(hut::UsagePage::ReservedUsagePage { .. }) => true,
+                Ok(_) => false,
+            }
+        }
+    }
+}
+
+fn vendor_report_filler(count: usize) -> PrintableRow {
+    PrintableRow {
+        bits: PrintableColumn::from("  "),
+        usage: PrintableColumn {
+            string: format!("Total of {count} vendor usages, ... use --full to see all"),
+            style: Styles::Note,
+        },
+        ..Default::default()
+    }
+}
+
 /// Print the parsed reports as an outline of how they look like
 fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options) {
     if r.report_id().is_some() {
@@ -527,21 +554,34 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
         r.size_in_bits()
     );
 
+    const REPEAT_LIMIT: usize = 3;
+
+    let mut vendor_report_count = 0;
     let mut table = PrintableTable::default();
     for field in r.fields() {
         let mut row = PrintableRow::default();
         row.bits = PrintableColumn::from(bits_to_str(&field.bits()));
+        if !opts.full && is_vendor_or_reserved_field(field) {
+            vendor_report_count += 1;
+        } else {
+            if vendor_report_count > REPEAT_LIMIT {
+                table.add(vendor_report_filler(vendor_report_count));
+            }
+            vendor_report_count = 0;
+        }
         match field {
             Field::Constant(_c) => {
                 row.usage = "######### Padding".into();
             }
             Field::Variable(v) => {
-                row.usage = format!("Usage: {}", usage_to_str(&v.usage)).into();
-                row.logical_range =
-                    logical_range_to_str(&v.logical_minimum, &v.logical_maximum).into();
-                row.physical_range =
-                    physical_range_to_str(&v.physical_minimum, &v.physical_maximum).into();
-                row.unit = unit_to_str(&v.unit).into();
+                if vendor_report_count <= REPEAT_LIMIT {
+                    row.usage = format!("Usage: {}", usage_to_str(&v.usage)).into();
+                    row.logical_range =
+                        logical_range_to_str(&v.logical_minimum, &v.logical_maximum).into();
+                    row.physical_range =
+                        physical_range_to_str(&v.physical_minimum, &v.physical_maximum).into();
+                    row.unit = unit_to_str(&v.unit).into();
+                }
             }
             Field::Array(a) => {
                 row.usage = "Usages:".into();
@@ -579,9 +619,14 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
                 }
             }
         }
-        table.add(row);
+        if vendor_report_count <= REPEAT_LIMIT {
+            table.add(row);
+        }
     }
 
+    if vendor_report_count > REPEAT_LIMIT {
+        table.add(vendor_report_filler(vendor_report_count));
+    }
     for row in table.rows {
         cprint!(stream, Styles::None, "#  ");
         for (idx, col) in row.columns().enumerate() {
