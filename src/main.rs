@@ -407,12 +407,17 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
                     u16::from(v.usage.usage_id),
                     hutstr
                 );
+                let max = match i32::from(v.logical_maximum) {
+                    m @ -1 => format!("0x{m:x}"),
+                    m @ 0x7fffffff => format!("0x{m:x}"),
+                    m => format!("{m}"),
+                };
                 cprint!(
                     stream,
                     Styles::None,
                     "Logical Range: {:5}..={:<5} | ",
                     i32::from(v.logical_minimum),
-                    i32::from(v.logical_maximum)
+                    max,
                 );
                 if let (Some(min), Some(max)) = (v.physical_minimum, v.physical_maximum) {
                     cprint!(
@@ -476,12 +481,17 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
                         "... use --full to see all usages"
                     );
                 }
+                let max = match i32::from(a.logical_maximum) {
+                    m @ -1 => format!("0x{m:x}"),
+                    m @ 0x7fffffff => format!("0x{m:x}"),
+                    m => format!("{m}"),
+                };
                 cprint!(
                     stream,
                     Styles::None,
                     "| Logical Range: {:5}..={:<5} | ",
                     i32::from(a.logical_minimum),
-                    i32::from(a.logical_maximum)
+                    max,
                 );
                 if let (Some(min), Some(max)) = (a.physical_minimum, a.physical_maximum) {
                     cprint!(
