@@ -360,6 +360,13 @@ fn usage_to_str(u: &Usage) -> String {
     let hutstr: String =
         match hut::Usage::new_from_page_and_id(u16::from(u.usage_page), u16::from(u.usage_id)) {
             Err(_) => "<unknown>".into(),
+            Ok(hut::Usage::VendorDefinedPage { vendor_page, usage }) => {
+                format!(
+                    "Vendor Defined Usage {:04x} / {:04x}",
+                    u16::from(vendor_page),
+                    u16::from(&usage)
+                )
+            }
             Ok(u) => format!("{} / {}", hut::UsagePage::from(&u), u),
         };
 
