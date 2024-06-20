@@ -19,7 +19,9 @@ use hidreport::hid::{
 };
 use hidreport::*;
 
+#[derive(Default)]
 enum Styles {
+    #[default]
     None,
     InputItem,
     OutputItem,
@@ -379,7 +381,7 @@ fn logical_range_to_str(
         m => format!("{m}"),
     };
     format!(
-        "Logical Range: {:5}..={:<5} | ",
+        "Logical Range: {:5}..={:<5}",
         i32::from(logical_minimum),
         max
     )
@@ -391,7 +393,7 @@ fn physical_range_to_str(
 ) -> Option<String> {
     if let (Some(min), Some(max)) = (physical_minimum, physical_maximum) {
         Some(format!(
-            "Physical Range: {:5}..={:<5} | ",
+            "Physical Range: {:5}..={:<5}",
             i32::from(min),
             i32::from(max)
         ))
@@ -426,9 +428,85 @@ fn unit_to_str(unit: &Option<Unit>) -> Option<String> {
 
 fn bits_to_str(bits: &std::ops::Range<usize>) -> String {
     if bits.len() > 1 {
-        format!("Bits: {:3}..={:<3} ", bits.start, bits.end - 1)
+        format!("Bits: {:3}..={:<3}", bits.start, bits.end - 1)
     } else {
-        format!("Bit:  {:3}       ", bits.start,)
+        format!("Bit:  {:3}      ", bits.start,)
+    }
+}
+
+#[derive(Default)]
+struct PrintableColumn {
+    string: String,
+    style: Styles,
+}
+
+impl From<&str> for PrintableColumn {
+    fn from(s: &str) -> PrintableColumn {
+        PrintableColumn {
+            string: s.to_string(),
+            style: Styles::None,
+        }
+    }
+}
+
+impl From<String> for PrintableColumn {
+    fn from(s: String) -> PrintableColumn {
+        PrintableColumn {
+            string: s,
+            style: Styles::None,
+        }
+    }
+}
+
+impl From<Option<String>> for PrintableColumn {
+    fn from(s: Option<String>) -> PrintableColumn {
+        match s {
+            None => PrintableColumn::default(),
+            Some(s) => PrintableColumn {
+                string: s,
+                style: Styles::None,
+            },
+        }
+    }
+}
+
+#[derive(Default)]
+struct PrintableRow {
+    bits: PrintableColumn,
+    usage: PrintableColumn,
+    logical_range: PrintableColumn,
+    physical_range: PrintableColumn,
+    unit: PrintableColumn,
+}
+
+impl PrintableRow {
+    fn columns<'a>(&'a self) -> impl Iterator<Item = &'a PrintableColumn> {
+        vec![
+            &self.bits,
+            &self.usage,
+            &self.logical_range,
+            &self.physical_range,
+            &self.unit,
+        ]
+        .into_iter()
+        .filter(move |x| !x.string.is_empty())
+    }
+}
+
+#[derive(Default)]
+struct PrintableTable {
+    rows: Vec<PrintableRow>,
+    colwidths: [usize; 5],
+}
+
+impl PrintableTable {
+    fn add(&mut self, row: PrintableRow) {
+        self.colwidths[0] = std::cmp::max(row.bits.string.len(), self.colwidths[0]);
+        self.colwidths[1] = std::cmp::max(row.usage.string.len(), self.colwidths[1]);
+        self.colwidths[2] = std::cmp::max(row.logical_range.string.len(), self.colwidths[2]);
+        self.colwidths[3] = std::cmp::max(row.physical_range.string.len(), self.colwidths[3]);
+        self.colwidths[4] = std::cmp::max(row.unit.string.len(), self.colwidths[4]);
+        self.rows.push(row);
     }
 }
 
@@ -448,29 +526,32 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
         "#    Report size: {} bits",
         r.size_in_bits()
     );
-    for field in r.fields().iter() {
-        cprint!(stream, Styles::None, "#  | {:16} | ", bits_to_str(&field.bits()));
+
+    let mut table = PrintableTable::default();
+    for field in r.fields() {
+        let mut row = PrintableRow::default();
+        row.bits = PrintableColumn::from(bits_to_str(&field.bits()));
         match field {
             Field::Constant(_c) => {
-                cprint!(stream, Styles::None, "{:60} |", "######### Padding");
+                row.usage = "######### Padding".into();
             }
             Field::Variable(v) => {
-                cprint!(stream, Styles::None, "Usage: {} | ", usage_to_str(&v.usage));
-                cprint!(
-                    stream,
-                    Styles::None,
-                    "{} | ",
-                    logical_range_to_str(&v.logical_minimum, &v.logical_maximum)
-                );
-                if let Some(s) = physical_range_to_str(&v.physical_minimum, &v.physical_maximum) {
-                    cprint!(stream, Styles::None, "{s}");
-                };
-                if let Some(s) = unit_to_str(&v.unit) {
-                    cprint!(stream, Styles::None, "{s}");
-                }
+                row.usage = format!("Usage: {}", usage_to_str(&v.usage)).into();
+                row.logical_range =
+                    logical_range_to_str(&v.logical_minimum, &v.logical_maximum).into();
+                row.physical_range =
+                    physical_range_to_str(&v.physical_minimum, &v.physical_maximum).into();
+                row.unit = unit_to_str(&v.unit).into();
             }
             Field::Array(a) => {
-                cprint!(stream, Styles::None, "Usages:");
+                row.usage = "Usages:".into();
+                row.logical_range =
+                    logical_range_to_str(&a.logical_minimum, &a.logical_maximum).into();
+                row.physical_range =
+                    physical_range_to_str(&a.physical_minimum, &a.physical_maximum).into();
+                row.unit = unit_to_str(&a.unit).into();
+                table.add(row);
+                row = PrintableRow::default();
                 let usages = a.usages().iter();
                 let usages = if opts.full {
                     usages.take(0xffffffff)
@@ -478,34 +559,39 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
                     usages.take(MAX_USAGES_DISPLAYED)
                 };
                 usages.for_each(|u| {
-                    cprint!(
-                        stream,
-                        Styles::None,
-                        "\n#                              {}",
-                        usage_to_str(&u)
-                    );
+                    let row = PrintableRow {
+                        bits: PrintableColumn::from(" "),
+                        usage: PrintableColumn::from(usage_to_str(&u)),
+                        ..Default::default()
+                    };
+                    table.add(row);
                 });
                 if !opts.full && a.usages().len() > MAX_USAGES_DISPLAYED {
-                    cprint!(
-                        stream,
-                        Styles::Note,
-                        "\n#                              {:55}",
-                        "... use --full to see all usages"
-                    );
-                }
-                cprint!(
-                    stream,
-                    Styles::None,
-                    "| {} | ",
-                    logical_range_to_str(&a.logical_minimum, &a.logical_maximum)
-                );
-                if let Some(s) = physical_range_to_str(&a.physical_minimum, &a.physical_maximum) {
-                    cprint!(stream, Styles::None, "{s}");
-                };
-                if let Some(s) = unit_to_str(&a.unit) {
-                    cprint!(stream, Styles::None, "{s}");
+                    let row = PrintableRow {
+                        bits: PrintableColumn::from(" "),
+                        usage: PrintableColumn {
+                            string: "... use --full to see all usages".into(),
+                            style: Styles::Note,
+                        },
+                        ..Default::default()
+                    };
+                    table.add(row);
                 }
             }
+        }
+        table.add(row);
+    }
+
+    for row in table.rows {
+        cprint!(stream, Styles::None, "#  ");
+        for (idx, col) in row.columns().enumerate() {
+            cprint!(
+                stream,
+                col.style,
+                "| {:w$} ",
+                col.string,
+                w = table.colwidths[idx]
+            );
         }
         cprintln!(stream);
     }
