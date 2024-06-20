@@ -354,6 +354,84 @@ fn find_sysfs_path(path: &Path) -> Result<PathBuf> {
     Ok(sysfs)
 }
 
+fn usage_to_str(u: &Usage) -> String {
+    let hutstr: String =
+        match hut::Usage::new_from_page_and_id(u16::from(u.usage_page), u16::from(u.usage_id)) {
+            Err(_) => "<unknown>".into(),
+            Ok(u) => format!("{} / {}", hut::UsagePage::from(&u), u),
+        };
+
+    format!(
+        "{:04x}/{:04x}: {:43}",
+        u16::from(u.usage_page),
+        u16::from(u.usage_id),
+        hutstr
+    )
+}
+
+fn logical_range_to_str(
+    logical_minimum: &LogicalMinimum,
+    logical_maximum: &LogicalMaximum,
+) -> String {
+    let max = match i32::from(logical_maximum) {
+        m @ -1 => format!("0x{m:x}"),
+        m @ 0x7fffffff => format!("0x{m:x}"),
+        m => format!("{m}"),
+    };
+    format!(
+        "Logical Range: {:5}..={:<5} | ",
+        i32::from(logical_minimum),
+        max
+    )
+}
+
+fn physical_range_to_str(
+    physical_minimum: &Option<PhysicalMinimum>,
+    physical_maximum: &Option<PhysicalMaximum>,
+) -> Option<String> {
+    if let (Some(min), Some(max)) = (physical_minimum, physical_maximum) {
+        Some(format!(
+            "Physical Range: {:5}..={:<5} | ",
+            i32::from(min),
+            i32::from(max)
+        ))
+    } else {
+        None
+    }
+}
+
+fn unit_to_str(unit: &Option<Unit>) -> Option<String> {
+    if let Some(u) = unit {
+        if let Some(units) = u.units() {
+            Some(format!(
+                "Unit: {:?}{}{}",
+                u.system(),
+                match u.system() {
+                    UnitSystem::None => "",
+                    _ => ": ",
+                },
+                units
+                    .iter()
+                    .map(|u| format!("{u}"))
+                    .collect::<Vec<String>>()
+                    .join("")
+            ))
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+fn bits_to_str(bits: &std::ops::Range<usize>) -> String {
+    if bits.len() > 1 {
+        format!("Bits: {:3}..={:<3} ", bits.start, bits.end - 1)
+    } else {
+        format!("Bit:  {:3}       ", bits.start,)
+    }
+}
+
 /// Print the parsed reports as an outline of how they look like
 fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options) {
     if r.report_id().is_some() {
@@ -371,81 +449,24 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
         r.size_in_bits()
     );
     for field in r.fields().iter() {
-        if field.bits().len() > 1 {
-            cprint!(
-                stream,
-                Styles::None,
-                "#  |   Bits: {:3}..={:<3} | ",
-                field.bits().start,
-                field.bits().end - 1
-            );
-        } else {
-            cprint!(
-                stream,
-                Styles::None,
-                "#  |   Bit:  {:3}       | ",
-                field.bits().start,
-            );
-        }
+        cprint!(stream, Styles::None, "#  | {:16} | ", bits_to_str(&field.bits()));
         match field {
             Field::Constant(_c) => {
                 cprint!(stream, Styles::None, "{:60} |", "######### Padding");
             }
             Field::Variable(v) => {
-                let hutstr: String = match hut::Usage::new_from_page_and_id(
-                    u16::from(v.usage.usage_page),
-                    u16::from(v.usage.usage_id),
-                ) {
-                    Err(_) => "<unknown>".into(),
-                    Ok(u) => format!("{} / {}", hut::UsagePage::from(&u), u),
-                };
+                cprint!(stream, Styles::None, "Usage: {} | ", usage_to_str(&v.usage));
                 cprint!(
                     stream,
                     Styles::None,
-                    "Usage: {:04x}/{:04x}: {:42} | ",
-                    u16::from(v.usage.usage_page),
-                    u16::from(v.usage.usage_id),
-                    hutstr
+                    "{} | ",
+                    logical_range_to_str(&v.logical_minimum, &v.logical_maximum)
                 );
-                let max = match i32::from(v.logical_maximum) {
-                    m @ -1 => format!("0x{m:x}"),
-                    m @ 0x7fffffff => format!("0x{m:x}"),
-                    m => format!("{m}"),
+                if let Some(s) = physical_range_to_str(&v.physical_minimum, &v.physical_maximum) {
+                    cprint!(stream, Styles::None, "{s}");
                 };
-                cprint!(
-                    stream,
-                    Styles::None,
-                    "Logical Range: {:5}..={:<5} | ",
-                    i32::from(v.logical_minimum),
-                    max,
-                );
-                if let (Some(min), Some(max)) = (v.physical_minimum, v.physical_maximum) {
-                    cprint!(
-                        stream,
-                        Styles::None,
-                        "Physical Range: {:5}..={:<5} | ",
-                        i32::from(min),
-                        i32::from(max)
-                    );
-                };
-                if let Some(u) = v.unit {
-                    if let Some(units) = u.units() {
-                        cprint!(
-                            stream,
-                            Styles::None,
-                            "Unit: {:?}{}{}",
-                            u.system(),
-                            match u.system() {
-                                UnitSystem::None => "",
-                                _ => ": ",
-                            },
-                            units
-                                .iter()
-                                .map(|u| format!("{u}"))
-                                .collect::<Vec<String>>()
-                                .join("")
-                        )
-                    }
+                if let Some(s) = unit_to_str(&v.unit) {
+                    cprint!(stream, Styles::None, "{s}");
                 }
             }
             Field::Array(a) => {
@@ -457,20 +478,11 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
                     usages.take(MAX_USAGES_DISPLAYED)
                 };
                 usages.for_each(|u| {
-                    let hutstr: String = match hut::Usage::new_from_page_and_id(
-                        u16::from(u.usage_page),
-                        u16::from(u.usage_id),
-                    ) {
-                        Err(_) => "<unknown>".into(),
-                        Ok(u) => format!("{} / {}", hut::UsagePage::from(&u), u),
-                    };
                     cprint!(
                         stream,
                         Styles::None,
-                        "\n#                              {:04x}/{:04x}: {:43}",
-                        u16::from(u.usage_page),
-                        u16::from(u.usage_id),
-                        hutstr
+                        "\n#                              {}",
+                        usage_to_str(&u)
                     );
                 });
                 if !opts.full && a.usages().len() > MAX_USAGES_DISPLAYED {
@@ -481,45 +493,17 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
                         "... use --full to see all usages"
                     );
                 }
-                let max = match i32::from(a.logical_maximum) {
-                    m @ -1 => format!("0x{m:x}"),
-                    m @ 0x7fffffff => format!("0x{m:x}"),
-                    m => format!("{m}"),
-                };
                 cprint!(
                     stream,
                     Styles::None,
-                    "| Logical Range: {:5}..={:<5} | ",
-                    i32::from(a.logical_minimum),
-                    max,
+                    "| {} | ",
+                    logical_range_to_str(&a.logical_minimum, &a.logical_maximum)
                 );
-                if let (Some(min), Some(max)) = (a.physical_minimum, a.physical_maximum) {
-                    cprint!(
-                        stream,
-                        Styles::None,
-                        "Physical Range: {:5}..={:<5} | ",
-                        i32::from(min),
-                        i32::from(max)
-                    );
+                if let Some(s) = physical_range_to_str(&a.physical_minimum, &a.physical_maximum) {
+                    cprint!(stream, Styles::None, "{s}");
                 };
-                if let Some(u) = a.unit {
-                    if let Some(units) = u.units() {
-                        cprint!(
-                            stream,
-                            Styles::None,
-                            "Unit: {:?}{}{}",
-                            u.system(),
-                            match u.system() {
-                                UnitSystem::None => "",
-                                _ => ": ",
-                            },
-                            units
-                                .iter()
-                                .map(|u| format!("{u}"))
-                                .collect::<Vec<String>>()
-                                .join("")
-                        )
-                    }
+                if let Some(s) = unit_to_str(&a.unit) {
+                    cprint!(stream, Styles::None, "{s}");
                 }
             }
         }
