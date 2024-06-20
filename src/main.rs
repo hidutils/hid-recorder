@@ -544,6 +544,20 @@ fn vendor_report_filler(count: usize) -> PrintableRow {
     }
 }
 
+fn repeat_usage_filler(count: usize) -> PrintableRow {
+    PrintableRow {
+        bits: PrintableColumn::from("  "),
+        usage: PrintableColumn {
+            string: format!(
+                "Total of {} repeated usages, ... use --full to see all",
+                count + 1
+            ),
+            style: Styles::Note,
+        },
+        ..Default::default()
+    }
+}
+
 /// Print the parsed reports as an outline of how they look like
 fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options) {
     if r.report_id().is_some() {
@@ -563,6 +577,8 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
 
     const REPEAT_LIMIT: usize = 3;
 
+    let mut last_usage: Usage = Usage::from(0);
+    let mut repeat_usage_count = 0;
     let mut vendor_report_count = 0;
     let mut table = PrintableTable::default();
     for field in r.fields() {
@@ -578,10 +594,13 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
         }
         match field {
             Field::Constant(_c) => {
+                if repeat_usage_count > REPEAT_LIMIT {
+                    table.add(repeat_usage_filler(repeat_usage_count));
+                }
                 row.usage = "######### Padding".into();
             }
             Field::Variable(v) => {
-                if vendor_report_count <= REPEAT_LIMIT {
+                if vendor_report_count <= REPEAT_LIMIT && repeat_usage_count <= REPEAT_LIMIT {
                     row.usage = format!("Usage: {}", usage_to_str(&v.usage)).into();
                     row.logical_range =
                         logical_range_to_str(&v.logical_minimum, &v.logical_maximum).into();
@@ -589,8 +608,20 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
                         physical_range_to_str(&v.physical_minimum, &v.physical_maximum).into();
                     row.unit = unit_to_str(&v.unit).into();
                 }
+                if !opts.full && last_usage == v.usage {
+                    repeat_usage_count += 1;
+                } else {
+                    if repeat_usage_count > REPEAT_LIMIT {
+                        table.add(repeat_usage_filler(repeat_usage_count));
+                    }
+                    repeat_usage_count = 0;
+                }
+                last_usage = v.usage;
             }
             Field::Array(a) => {
+                if repeat_usage_count > REPEAT_LIMIT {
+                    table.add(repeat_usage_filler(repeat_usage_count));
+                }
                 row.usage = "Usages:".into();
                 row.logical_range =
                     logical_range_to_str(&a.logical_minimum, &a.logical_maximum).into();
@@ -626,13 +657,16 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
                 }
             }
         }
-        if vendor_report_count <= REPEAT_LIMIT {
+        if vendor_report_count <= REPEAT_LIMIT && repeat_usage_count <= REPEAT_LIMIT {
             table.add(row);
         }
     }
 
     if vendor_report_count > REPEAT_LIMIT {
         table.add(vendor_report_filler(vendor_report_count));
+    }
+    if repeat_usage_count > REPEAT_LIMIT {
+        table.add(repeat_usage_filler(repeat_usage_count));
     }
     for row in table.rows {
         cprint!(stream, Styles::None, "#  ");
