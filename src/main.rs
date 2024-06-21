@@ -83,6 +83,10 @@ struct Cli {
     #[arg(long, default_value_t = ("-").to_string())]
     output_file: String,
 
+    /// Only describe the device, do not wait for events
+    #[arg(long, default_value_t = false)]
+    only_describe: bool,
+
     /// Path to the hidraw or event device node, or a binary
     /// hid descriptor file
     path: Option<PathBuf>,
@@ -1090,7 +1094,7 @@ fn hid_recorder() -> Result<()> {
     let opts = Options { full: cli.full };
 
     let rdesc = parse(&mut stream, &rdesc_file, &opts)?;
-    if path.starts_with("/dev") {
+    if !cli.only_describe && path.starts_with("/dev") {
         read_events(&mut stream, &path, &rdesc)?
     }
     Ok(())
