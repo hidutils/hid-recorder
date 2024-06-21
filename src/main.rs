@@ -613,12 +613,13 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
             }
             vendor_report_count = 0;
         }
-        match field {
+        let row = match field {
             Field::Constant(_c) => {
                 if repeat_usage_count > REPEAT_LIMIT {
                     table.add(repeat_usage_filler(repeat_usage_count));
                 }
                 row.usage = "######### Padding".into();
+                Some(row)
             }
             Field::Variable(v) => {
                 if vendor_report_count <= REPEAT_LIMIT && repeat_usage_count <= REPEAT_LIMIT {
@@ -638,6 +639,7 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
                     repeat_usage_count = 0;
                 }
                 last_usage = v.usage;
+                Some(row)
             }
             Field::Array(a) => {
                 if repeat_usage_count > REPEAT_LIMIT {
@@ -650,7 +652,6 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
                     physical_range_to_str(&a.physical_minimum, &a.physical_maximum).into();
                 row.unit = unit_to_str(&a.unit).into();
                 table.add(row);
-                row = PrintableRow::default();
                 let usages = a.usages().iter();
                 let usages = if opts.full {
                     usages.take(0xffffffff)
@@ -676,10 +677,13 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
                     };
                     table.add(row);
                 }
+                None
             }
-        }
+        };
         if vendor_report_count <= REPEAT_LIMIT && repeat_usage_count <= REPEAT_LIMIT {
-            table.add(row);
+            if let Some(row) = row {
+                table.add(row);
+            }
         }
     }
 
