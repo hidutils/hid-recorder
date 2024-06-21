@@ -3,7 +3,7 @@
 use anyhow::{bail, Context, Result};
 use clap::{ColorChoice, Parser};
 use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
-use owo_colors::{OwoColorize, Stream::Stdout, Style};
+use owo_colors::{OwoColorize, Rgb, Stream::Stdout, Style};
 use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
@@ -31,6 +31,9 @@ enum Styles {
     Separator,
     Timestamp,
     Note,
+    Report {
+        report_id: ReportId,
+    },
 }
 
 impl Styles {
@@ -45,6 +48,15 @@ impl Styles {
             Styles::ReportId => Style::new().magenta().bold(),
             Styles::Separator => Style::new().magenta(),
             Styles::Timestamp => Style::new().purple(),
+            Styles::Report { report_id } => Style::new().on_color(match u8::from(report_id) % 7 {
+                1 => Rgb(0xfc, 0x8d, 0x62),
+                2 => Rgb(0x8d, 0xa0, 0xcb),
+                3 => Rgb(0xe7, 0x8a, 0xc3),
+                4 => Rgb(0xa6, 0xd8, 0x54),
+                5 => Rgb(0xff, 0xd9, 0x2f),
+                6 => Rgb(0xe5, 0xc4, 0x94),
+                _ => Rgb(0x66, 0xc2, 0xa5),
+            }),
         }
     }
 }
@@ -564,18 +576,23 @@ fn repeat_usage_filler(count: usize) -> PrintableRow {
 
 /// Print the parsed reports as an outline of how they look like
 fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options) {
+    let report_style;
+
     if r.report_id().is_some() {
-        cprintln!(
-            stream,
-            Styles::ReportId,
-            "# Report ID: {}",
-            r.report_id().unwrap()
-        );
+        let report_id = r.report_id().unwrap();
+        report_style = Styles::Report { report_id };
+        cprint!(stream, Styles::None, "# ");
+        cprint!(stream, report_style, " ");
+        cprintln!(stream, Styles::None, " Report ID: {}", report_id);
+    } else {
+        report_style = Styles::None;
     }
+    cprint!(stream, Styles::None, "# ");
+    cprint!(stream, report_style, " ");
     cprintln!(
         stream,
         Styles::None,
-        "#    Report size: {} bits",
+        " | Report size: {} bits",
         r.size_in_bits()
     );
 
@@ -673,7 +690,9 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
         table.add(repeat_usage_filler(repeat_usage_count));
     }
     for row in table.rows {
-        cprint!(stream, Styles::None, "#  ");
+        cprint!(stream, Styles::None, "# ");
+        cprint!(stream, report_style, " ");
+        cprint!(stream, Styles::None, " ");
         for (idx, col) in row.columns().enumerate() {
             cprint!(
                 stream,
@@ -920,7 +939,10 @@ fn parse_input_report(
     };
 
     if let Some(id) = report.report_id() {
-        cprintln!(stream, Styles::None, "# Report ID: {id} / ");
+        let report_style = Styles::Report { report_id: *id };
+        cprint!(stream, Styles::None, "# ");
+        cprint!(stream, report_style, " ");
+        cprintln!(stream, Styles::None, " Report ID: {id} / ");
     }
 
     let collections: HashSet<&Collection> = report
