@@ -685,8 +685,7 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
 
     if vendor_report_count > REPEAT_LIMIT {
         table.add(vendor_report_filler(vendor_report_count));
-    }
-    if repeat_usage_count > REPEAT_LIMIT {
+    } else if repeat_usage_count > REPEAT_LIMIT {
         table.add(repeat_usage_filler(repeat_usage_count));
     }
     for row in table.rows {
