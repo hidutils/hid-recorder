@@ -553,7 +553,7 @@ fn vendor_report_filler(count: usize) -> PrintableRow {
     PrintableRow {
         bits: PrintableColumn::from("  "),
         usage: PrintableColumn {
-            string: format!("Total of {count} vendor usages, ... use --full to see all"),
+            string: format!("Total of {count} vendor usages, use --full to see all"),
             style: Styles::Note,
         },
         ..Default::default()
@@ -565,7 +565,7 @@ fn repeat_usage_filler(count: usize) -> PrintableRow {
         bits: PrintableColumn::from("  "),
         usage: PrintableColumn {
             string: format!(
-                "Total of {} repeated usages, ... use --full to see all",
+                "Total of {} repeated usages, use --full to see all",
                 count + 1
             ),
             style: Styles::Note,
