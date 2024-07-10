@@ -18,6 +18,7 @@ use hidreport::hid::{
     ReportDescriptorItems,
 };
 use hidreport::*;
+use hut::CName;
 
 #[derive(Default)]
 enum Styles {
@@ -116,63 +117,78 @@ struct RDescFile {
     pid: u32,
 }
 
-fn fmt_main_item(item: &MainItem) -> String {
+fn fmt_main_item(item: &MainItem, size: usize) -> String {
     match item {
         MainItem::Input(i) => {
             format!(
-                "Input ({},{},{}{}{}{}{}{})",
-                if i.is_constant() { "Cnst" } else { "Data" },
+                "Input{} ({}{}|{}{}{}{}{}{})",
+                if size != 8 {
+                    format!("_i{size}")
+                } else {
+                    String::new()
+                },
+                if i.is_constant() { "Const|" } else { "" },
                 if i.is_variable() { "Var" } else { "Arr" },
                 if i.is_relative() { "Rel" } else { "Abs" },
-                if i.wraps() { ",Wrap" } else { "" },
-                if i.is_nonlinear() { ",NonLin" } else { "" },
+                if i.wraps() { "|Wrap" } else { "" },
+                if i.is_nonlinear() { "|NonLin" } else { "" },
                 if i.has_no_preferred_state() {
-                    ",NoPref"
+                    "|NoPref"
                 } else {
                     ""
                 },
-                if i.has_null_state() { ",Null" } else { "" },
-                if i.is_buffered_bytes() { ",Buff" } else { "" }
+                if i.has_null_state() { "|Null" } else { "" },
+                if i.is_buffered_bytes() { "|Buff" } else { "" }
             )
         }
         MainItem::Output(i) => {
             format!(
-                "Output ({},{},{}{}{}{}{}{}{})",
-                if i.is_constant() { "Cnst" } else { "Data" },
+                "Output{} ({}{}|{}{}{}{}{}{}{})",
+                if size != 8 {
+                    format!("_i{size}")
+                } else {
+                    String::new()
+                },
+                if i.is_constant() { "Const|" } else { "" },
                 if i.is_variable() { "Var" } else { "Arr" },
                 if i.is_relative() { "Rel" } else { "Abs" },
-                if i.wraps() { ",Wrap" } else { "" },
-                if i.is_nonlinear() { ",NonLin" } else { "" },
+                if i.wraps() { "|Wrap" } else { "" },
+                if i.is_nonlinear() { "|NonLin" } else { "" },
                 if i.has_no_preferred_state() {
-                    ",NoPref"
+                    "|NoPref"
                 } else {
                     ""
                 },
-                if i.has_null_state() { ",Null" } else { "" },
-                if i.is_volatile() { ",Vol" } else { "" },
-                if i.is_buffered_bytes() { ",Buff" } else { "" }
+                if i.has_null_state() { "|Null" } else { "" },
+                if i.is_volatile() { "|Vol" } else { "" },
+                if i.is_buffered_bytes() { "|Buff" } else { "" }
             )
         }
         MainItem::Feature(i) => {
             format!(
-                "Feature ({},{},{}{}{}{}{}{}{})",
-                if i.is_constant() { "Cnst" } else { "Data" },
+                "Feature{} ({}{}|{}{}{}{}{}{}{})",
+                if size != 8 {
+                    format!("_i{size}")
+                } else {
+                    String::new()
+                },
+                if i.is_constant() { "Const|" } else { "" },
                 if i.is_variable() { "Var" } else { "Arr" },
                 if i.is_relative() { "Rel" } else { "Abs" },
-                if i.wraps() { ",Wrap" } else { "" },
-                if i.is_nonlinear() { ",NonLin" } else { "" },
+                if i.wraps() { "|Wrap" } else { "" },
+                if i.is_nonlinear() { "|NonLin" } else { "" },
                 if i.has_no_preferred_state() {
-                    ",NoPref"
+                    "|NoPref"
                 } else {
                     ""
                 },
-                if i.has_null_state() { ",Null" } else { "" },
-                if i.is_volatile() { ",Vol" } else { "" },
-                if i.is_buffered_bytes() { ",Buff" } else { "" }
+                if i.has_null_state() { "|Null" } else { "" },
+                if i.is_volatile() { "|Vol" } else { "" },
+                if i.is_buffered_bytes() { "|Buff" } else { "" }
             )
         }
         MainItem::Collection(c) => format!(
-            "Collection ({})",
+            "Collection{} (",
             match c {
                 CollectionItem::Physical => "Physical",
                 CollectionItem::Application => "Application",
@@ -185,54 +201,79 @@ fn fmt_main_item(item: &MainItem) -> String {
                 CollectionItem::VendorDefined { .. } => "VendorDefined",
             },
         ),
-        MainItem::EndCollection => "End Collection".into(),
+        MainItem::EndCollection => ")".into(),
     }
 }
 
-fn fmt_global_item(item: &GlobalItem) -> String {
+fn get_unsigned(value: i32, size: usize) -> u32 {
+    match size {
+        8 => (value as u8).into(),
+        16 => (value as u16).into(),
+        32 => value as u32,
+        _ => todo!(),
+    }
+}
+
+fn fmt_global_item(item: &GlobalItem, size: usize) -> String {
     match item {
         GlobalItem::UsagePage { usage_page } => {
             let upval = u16::from(usage_page);
             let up = hut::UsagePage::try_from(upval);
-            let str = match up {
-                Ok(up) => format!("{up}"),
-                Err(_) => format!("Usage Page (0x{upval:04X})"),
-            };
-
-            format!("Usage Page ({str})")
+            match up {
+                Ok(up) => format!("{}", up.c_name(size)),
+                Err(_) => format!("UsagePage_i{size} (0x{upval:04X})"),
+            }
         }
-        GlobalItem::LogicalMinimum { minimum } => format!("Logical Minimum ({minimum})"),
+        GlobalItem::LogicalMinimum { minimum } => format!("LogicalMinimum_i{size} ({minimum})"),
         GlobalItem::LogicalMaximum { maximum } => {
             // Special case -1 as maximum. It's common enough and never means -1 but
             // we can only know this is we check the minimum for signed-ness.
             let maximum: i32 = maximum.into();
             if maximum == -1 {
-                format!("Logical Maximum ({})", maximum as u32)
+                format!("LogicalMaximum_i{size} ({})", maximum as u32)
             } else {
-                format!("Logical Maximum ({maximum})")
+                format!("LogicalMaximum_i{size} ({maximum})")
             }
         }
-        GlobalItem::PhysicalMinimum { minimum } => format!("Physical Minimum ({minimum})"),
-        GlobalItem::PhysicalMaximum { maximum } => format!("Physical Maximum ({maximum})"),
-        GlobalItem::UnitExponent { exponent } => format!("Unit Exponent ({})", exponent.exponent()),
-        GlobalItem::Unit { unit } => format!(
-            "Unit ({:?}{}{unit})",
-            unit.system(),
-            match unit.system() {
-                UnitSystem::None => "",
-                _ => ": ",
+        GlobalItem::PhysicalMinimum { minimum } => format!("PhysicalMinimum_i{size} ({minimum})"),
+        GlobalItem::PhysicalMaximum { maximum } => {
+            format!(
+                "PhysicalMaximum_i{size} ({})",
+                get_unsigned(i32::from(maximum), size)
+            )
+        }
+        GlobalItem::UnitExponent { exponent } => format!("UnitExponent ({})", exponent.exponent()),
+        GlobalItem::Unit { unit } => {
+            let units = unit.units().unwrap_or(vec![]);
+
+            if units.is_empty() {
+                format!("Unit (0)")
+            } else if units.len() == 1 {
+                format!(
+                    "Unit ({}) /* {:?}:{:?} */",
+                    units[0],
+                    unit.system(),
+                    units
+                )
+            } else {
+                format!(
+                    "Unit (0x{:04x}) /* {:?}:{:?} */",
+                    u32::from(unit),
+                    unit.system(),
+                    units
+                )
             }
-        ),
-        GlobalItem::ReportSize { size } => format!("Report Size ({size})"),
-        GlobalItem::ReportId { id } => format!("Report ID ({id})"),
-        GlobalItem::ReportCount { count } => format!("Report Count ({count})"),
+        }
+        GlobalItem::ReportSize { size } => format!("ReportSize ({size})"),
+        GlobalItem::ReportId { id } => format!("ReportId ({id})"),
+        GlobalItem::ReportCount { count } => format!("ReportCount ({count})"),
         GlobalItem::Push => "Push".into(),
         GlobalItem::Pop => "Pop".into(),
         GlobalItem::Reserved => "Reserved".into(),
     }
 }
 
-fn fmt_local_item(item: &LocalItem, global_usage_page: &UsagePage) -> String {
+fn fmt_local_item(item: &LocalItem, global_usage_page: &UsagePage, size: usize) -> String {
     match item {
         LocalItem::Usage {
             usage_page,
@@ -243,21 +284,26 @@ fn fmt_local_item(item: &LocalItem, global_usage_page: &UsagePage) -> String {
                 None => global_usage_page,
             };
             let hut = hut::UsagePage::try_from(u16::from(up));
-            let str = match hut {
+            match hut {
                 Ok(hut) => {
                     let uidval = u16::from(usage_id);
                     let u = hut.to_usage(uidval);
                     match u {
-                        Ok(u) => format!("{u}"),
-                        Err(_) => format!("0x{uidval:04X}"),
+                        Ok(u) => format!("{}", u.c_name(size)),
+                        Err(_) => {
+                            if size < 16 {
+                                format!("Usage_i{size} (0x{uidval:02x})")
+                            } else {
+                                format!("Usage_i{size} (0x{uidval:04x})")
+                            }
+                        }
                     }
                 }
-                Err(_) => format!("0x{:04x}", u16::from(usage_id)),
-            };
-            format!("Usage ({str})")
+                Err(_) => format!("Usage_i{size} (0x{:04x})", u16::from(usage_id)),
+            }
         }
-        LocalItem::UsageMinimum { minimum } => format!("UsageMinimum ({minimum})"),
-        LocalItem::UsageMaximum { maximum } => format!("UsageMaximum ({maximum})"),
+        LocalItem::UsageMinimum { minimum } => format!("UsageMinimum_i{size} ({minimum})"),
+        LocalItem::UsageMaximum { maximum } => format!("UsageMaximum_i{size} ({maximum})"),
         LocalItem::DesignatorIndex { index } => format!("DesignatorIndex ({index})"),
         LocalItem::DesignatorMinimum { minimum } => format!("DesignatorMinimum ({minimum})"),
         LocalItem::DesignatorMaximum { maximum } => format!("DesignatorMaximum ({maximum})"),
@@ -270,10 +316,11 @@ fn fmt_local_item(item: &LocalItem, global_usage_page: &UsagePage) -> String {
 }
 
 fn fmt_item(item: &impl Item, usage_page: &UsagePage) -> String {
+    let size_in_bits = (item.size() - 1) * 8;
     match item.item_type() {
-        ItemType::Main(mi) => fmt_main_item(&mi),
-        ItemType::Global(gi) => fmt_global_item(&gi),
-        ItemType::Local(li) => fmt_local_item(&li, usage_page),
+        ItemType::Main(mi) => fmt_main_item(&mi, size_in_bits),
+        ItemType::Global(gi) => fmt_global_item(&gi, size_in_bits),
+        ItemType::Local(li) => fmt_local_item(&li, usage_page, size_in_bits),
         i => format!("{:?}", i),
     }
 }
