@@ -20,3 +20,7 @@ chrono = "0.4.38"
 hidreport = "0.4.0"
 hut = "0.2.0"
 human-sort = "0.2.2"
+libbpf-rs = "0.23"
+
+[build-dependencies]
+libbpf-cargo = "0.23"
