@@ -7,10 +7,12 @@ use owo_colors::{OwoColorize, Rgb, Stream::Stdout, Style};
 use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
+use std::ops::Deref;
 use std::os::fd::AsFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use hidreport::hid::{
@@ -18,6 +20,75 @@ use hidreport::hid::{
     ReportDescriptorItems,
 };
 use hidreport::*;
+
+static mut OUTFILE: OnceLock<
+    std::sync::Mutex<std::cell::RefCell<std::io::LineWriter<std::fs::File>>>,
+> = OnceLock::new();
+
+enum Outfile {
+    Stdout,
+    File(&'static mut std::sync::Mutex<std::cell::RefCell<std::io::LineWriter<std::fs::File>>>),
+}
+
+impl Outfile {
+    fn new() -> Self {
+        unsafe {
+            match OUTFILE.get_mut() {
+                None => Outfile::Stdout,
+                Some(o) => Outfile::File(o),
+            }
+        }
+    }
+
+    fn init(cli: &Cli) -> Result<()> {
+        if cli.output_file == "-" {
+            // Bit lame but easier to just set the env for owo_colors to figure out the rest
+            match cli.color {
+                ColorChoice::Never => std::env::set_var("NO_COLOR", "1"),
+                ColorChoice::Auto => {}
+                ColorChoice::Always => std::env::set_var("FORCE_COLOR", "1"),
+            }
+
+            return Ok(());
+        }
+
+        std::env::set_var("NO_COLOR", "1");
+        let out = std::fs::File::create(cli.output_file.clone()).unwrap();
+        let _ = unsafe {
+            OUTFILE.set(std::sync::Mutex::new(std::cell::RefCell::new(
+                std::io::LineWriter::new(out),
+            )))
+        };
+        Ok(())
+    }
+}
+
+impl Write for Outfile {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Outfile::Stdout => std::io::stdout().write(buf),
+            Outfile::File(o) => o.get_mut().unwrap().deref().borrow_mut().write(buf),
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Outfile::Stdout => std::io::stdout().flush(),
+            Outfile::File(o) => o.get_mut().unwrap().deref().borrow_mut().flush(),
+        }
+    }
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        match self {
+            Outfile::Stdout => std::io::stdout().write_all(buf),
+            Outfile::File(o) => o.get_mut().unwrap().deref().borrow_mut().write_all(buf),
+        }
+    }
+    fn write_fmt(&mut self, args: std::fmt::Arguments<'_>) -> std::io::Result<()> {
+        match self {
+            Outfile::Stdout => std::io::stdout().write_fmt(args),
+            Outfile::File(o) => o.get_mut().unwrap().deref().borrow_mut().write_fmt(args),
+        }
+    }
+}
 
 #[derive(Default)]
 enum Styles {
@@ -63,18 +134,25 @@ impl Styles {
 
 const MAX_USAGES_DISPLAYED: usize = 5;
 
-// Usage: cprintln!(Sytles::Data, <normal println args>)
+// Usage: cprintln!(Styles::Data, <normal println args>)
+//    or: cprintln!()
 macro_rules! cprintln {
-    ($stream:ident) => { writeln!($stream).unwrap(); };
-    ($stream:ident, $style:expr, $($arg:tt)*) => {{
-        writeln!($stream, "{}", format!($($arg)*).if_supports_color(Stdout, |text| text.style($style.style()))).unwrap();
+    () => { writeln!(Outfile::new()).unwrap() };
+    ($style:expr, $($arg:tt)*) => {{
+        writeln!(Outfile::new(),
+                 "{}",
+                 format!($($arg)*).if_supports_color(Stdout, |text| text.style($style.style())))
+        .unwrap();
     }};
 }
 
+// Usage: cprint!(Styles::Data, <normal println args>)
 macro_rules! cprint {
-    ($stream:ident) => { write!($stream).unwrap(); };
-    ($stream:ident, $style:expr, $($arg:tt)*) => {{
-        write!($stream, "{}", format!($($arg)*).if_supports_color(Stdout, |text| text.style($style.style()))).unwrap();
+    ($style:expr, $($arg:tt)*) => {{
+        write!(Outfile::new(),
+               "{}",
+               format!($($arg)*).if_supports_color(Stdout, |text| text.style($style.style())))
+        .unwrap();
     }};
 }
 
@@ -286,7 +364,7 @@ fn fmt_item(item: &impl Item, usage_page: &UsagePage) -> String {
     }
 }
 
-fn print_rdesc_items(stream: &mut impl Write, bytes: &[u8]) -> Result<()> {
+fn print_rdesc_items(bytes: &[u8]) -> Result<()> {
     let rdesc_items = ReportDescriptorItems::try_from(bytes)?;
     let mut indent = 0;
     let mut current_usage_page = UsagePage::from(0u16); // Undefined
@@ -314,7 +392,7 @@ fn print_rdesc_items(stream: &mut impl Write, bytes: &[u8]) -> Result<()> {
             ItemType::Global(GlobalItem::ReportId { .. }) => Styles::ReportId,
             _ => Styles::None,
         };
-        cprintln!(stream, style, "# {bytes:30} // {indented:41} {offset}");
+        cprintln!(style, "# {bytes:30} // {indented:41} {offset}");
 
         match item.item_type() {
             ItemType::Main(MainItem::Collection(_)) => indent += 2,
@@ -581,26 +659,21 @@ fn repeat_usage_filler(count: usize) -> PrintableRow {
 }
 
 /// Print the parsed reports as an outline of how they look like
-fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options) {
+fn print_report_summary(r: &impl Report, opts: &Options) {
     let report_style;
 
     if r.report_id().is_some() {
         let report_id = r.report_id().unwrap();
         report_style = Styles::Report { report_id };
-        cprint!(stream, Styles::None, "# ");
-        cprint!(stream, report_style, " ");
-        cprintln!(stream, Styles::None, " Report ID: {}", report_id);
+        cprint!(Styles::None, "# ");
+        cprint!(report_style, " ");
+        cprintln!(Styles::None, " Report ID: {}", report_id);
     } else {
         report_style = Styles::None;
     }
-    cprint!(stream, Styles::None, "# ");
-    cprint!(stream, report_style, " ");
-    cprintln!(
-        stream,
-        Styles::None,
-        " | Report size: {} bits",
-        r.size_in_bits()
-    );
+    cprint!(Styles::None, "# ");
+    cprint!(report_style, " ");
+    cprintln!(Styles::None, " | Report size: {} bits", r.size_in_bits());
 
     const REPEAT_LIMIT: usize = 3;
 
@@ -701,19 +774,13 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
         table.add(repeat_usage_filler(repeat_usage_count));
     }
     for row in table.rows {
-        cprint!(stream, Styles::None, "# ");
-        cprint!(stream, report_style, " ");
-        cprint!(stream, Styles::None, " ");
+        cprint!(Styles::None, "# ");
+        cprint!(report_style, " ");
+        cprint!(Styles::None, " ");
         for (idx, col) in row.columns().enumerate() {
-            cprint!(
-                stream,
-                col.style,
-                "| {:w$} ",
-                col.string,
-                w = table.colwidths[idx]
-            );
+            cprint!(col.style, "| {:w$} ", col.string, w = table.colwidths[idx]);
         }
-        cprintln!(stream);
+        cprintln!();
     }
 }
 
@@ -781,7 +848,7 @@ fn find_rdesc(path: &Path) -> Result<RDescFile> {
     }
 }
 
-fn parse(stream: &mut impl Write, rdesc: &RDescFile, opts: &Options) -> Result<ReportDescriptor> {
+fn parse(rdesc: &RDescFile, opts: &Options) -> Result<ReportDescriptor> {
     let bytes = std::fs::read(&rdesc.path)?;
     if bytes.is_empty() {
         bail!("Empty report descriptor");
@@ -793,14 +860,13 @@ fn parse(stream: &mut impl Write, rdesc: &RDescFile, opts: &Options) -> Result<R
     };
     let (bustype, vid, pid) = (rdesc.bustype, rdesc.vid, rdesc.pid);
 
-    cprintln!(stream, Styles::None, "# {name}");
+    cprintln!(Styles::None, "# {name}");
     cprintln!(
-        stream,
         Styles::None,
         "# Report descriptor length: {} bytes",
         bytes.len()
     );
-    print_rdesc_items(stream, &bytes)?;
+    print_rdesc_items(&bytes)?;
 
     // Print the readable fields
     let bytestr = bytes
@@ -808,39 +874,31 @@ fn parse(stream: &mut impl Write, rdesc: &RDescFile, opts: &Options) -> Result<R
         .map(|b| format!("{b:02x}"))
         .collect::<Vec<String>>()
         .join(" ");
-    cprintln!(stream, Styles::Data, "R: {} {bytestr}", bytes.len());
-    cprintln!(stream, Styles::Data, "N: {name}");
-    cprintln!(stream, Styles::Data, "I: {bustype:x} {vid:x} {pid:x}");
+    cprintln!(Styles::Data, "R: {} {bytestr}", bytes.len());
+    cprintln!(Styles::Data, "N: {name}");
+    cprintln!(Styles::Data, "I: {bustype:x} {vid:x} {pid:x}");
 
     let rdesc = ReportDescriptor::try_from(&bytes as &[u8])?;
-    cprintln!(stream, Styles::None, "# Report descriptor:");
+    cprintln!(Styles::None, "# Report descriptor:");
     let input_reports = rdesc.input_reports();
     if !input_reports.is_empty() {
         for r in rdesc.input_reports() {
-            cprintln!(stream, Styles::InputItem, "# ------- Input Report ------- ");
-            print_report_summary(stream, r, opts);
+            cprintln!(Styles::InputItem, "# ------- Input Report ------- ");
+            print_report_summary(r, opts);
         }
     }
     let output_reports = rdesc.output_reports();
     if !output_reports.is_empty() {
         for r in rdesc.output_reports() {
-            cprintln!(
-                stream,
-                Styles::OutputItem,
-                "# ------- Output Report ------- "
-            );
-            print_report_summary(stream, r, opts);
+            cprintln!(Styles::OutputItem, "# ------- Output Report ------- ");
+            print_report_summary(r, opts);
         }
     }
     let feature_reports = rdesc.feature_reports();
     if !feature_reports.is_empty() {
         for r in rdesc.feature_reports() {
-            cprintln!(
-                stream,
-                Styles::FeatureItem,
-                "# ------- Feature Report ------- "
-            );
-            print_report_summary(stream, r, opts);
+            cprintln!(Styles::FeatureItem, "# ------- Feature Report ------- ");
+            print_report_summary(r, opts);
         }
     }
 
@@ -861,11 +919,10 @@ fn get_hut_str(usage: &Usage) -> String {
     }
 }
 
-fn print_field_values(stream: &mut impl Write, bytes: &[u8], field: &Field) {
+fn print_field_values(bytes: &[u8], field: &Field) {
     match field {
         Field::Constant(_) => {
             cprint!(
-                stream,
                 Styles::None,
                 "<{} bits padding> | ",
                 field.bits().clone().count()
@@ -876,17 +933,16 @@ fn print_field_values(stream: &mut impl Write, bytes: &[u8], field: &Field) {
             if var.bits.len() <= 32 {
                 if var.is_signed() {
                     let v = var.extract_i32(bytes).unwrap();
-                    cprint!(stream, Styles::None, "{}: {:5} | ", hutstr, v);
+                    cprint!(Styles::None, "{}: {:5} | ", hutstr, v);
                 } else {
                     let v = var.extract_u32(bytes).unwrap();
-                    cprint!(stream, Styles::None, "{}: {:5} | ", hutstr, v);
+                    cprint!(Styles::None, "{}: {:5} | ", hutstr, v);
                 }
             } else {
                 // FIXME: output is not correct if start/end doesn't align with byte
                 // boundaries
                 let data = &bytes[var.bits.start / 8..var.bits.end / 8];
                 cprint!(
-                    stream,
                     Styles::None,
                     "{}: {} | ",
                     hutstr,
@@ -916,10 +972,10 @@ fn print_field_values(stream: &mut impl Write, bytes: &[u8], field: &Field) {
                     // Usage within range?
                     if let Some(usage) = usage_range.lookup_usage(&usage) {
                         let hutstr = get_hut_str(usage);
-                        cprint!(stream, Styles::None, "{}: {:5} | ", hutstr, v);
+                        cprint!(Styles::None, "{}: {:5} | ", hutstr, v);
                     } else {
                         // Let's just print the value as-is
-                        cprint!(stream, Styles::None, "{v:02x} | ");
+                        cprint!(Styles::None, "{v:02x} | ");
                     }
                 });
             } else {
@@ -928,7 +984,6 @@ fn print_field_values(stream: &mut impl Write, bytes: &[u8], field: &Field) {
                     None => "<unknown>".to_string(),
                 };
                 cprint!(
-                    stream,
                     Styles::None,
                     "{hutstr}: {} |",
                     vs.iter()
@@ -939,21 +994,16 @@ fn print_field_values(stream: &mut impl Write, bytes: &[u8], field: &Field) {
     }
 }
 
-fn parse_input_report(
-    stream: &mut impl Write,
-    bytes: &[u8],
-    rdesc: &ReportDescriptor,
-    start_time: &Instant,
-) -> Result<()> {
+fn parse_input_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Instant) -> Result<()> {
     let Some(report) = rdesc.find_input_report(bytes) else {
         bail!("Unable to find matching report");
     };
 
     if let Some(id) = report.report_id() {
         let report_style = Styles::Report { report_id: *id };
-        cprint!(stream, Styles::None, "# ");
-        cprint!(stream, report_style, " ");
-        cprintln!(stream, Styles::None, " Report ID: {id} / ");
+        cprint!(Styles::None, "# ");
+        cprint!(report_style, " ");
+        cprintln!(Styles::None, " Report ID: {id} / ");
     }
 
     let collections: HashSet<&Collection> = report
@@ -963,17 +1013,17 @@ fn parse_input_report(
         .filter(|c| matches!(c.collection_type(), CollectionType::Logical))
         .collect();
     if collections.is_empty() {
-        cprint!(stream, Styles::None, "#                ");
+        cprint!(Styles::None, "#                ");
         for field in report.fields() {
-            print_field_values(stream, bytes, field);
+            print_field_values(bytes, field);
         }
-        cprintln!(stream);
+        cprintln!();
     } else {
         let mut collections: Vec<&Collection> = collections.into_iter().collect();
         collections.sort_by(|a, b| a.id().partial_cmp(b.id()).unwrap());
 
         for collection in collections {
-            cprint!(stream, Styles::None, "#                ");
+            cprint!(Styles::None, "#                ");
             for field in report.fields().iter().filter(|f| {
                 // logical collections may be nested, so we only group those items together
                 // where the deepest logical collection matches
@@ -984,16 +1034,15 @@ fn parse_input_report(
                     .map(|c| c == collection)
                     .unwrap_or(false)
             }) {
-                print_field_values(stream, bytes, field);
+                print_field_values(bytes, field);
             }
-            cprintln!(stream);
+            cprintln!();
         }
     }
 
     let elapsed = start_time.elapsed();
 
     cprintln!(
-        stream,
         Styles::Data,
         "E: {:06}.{:06} {} {}",
         elapsed.as_secs(),
@@ -1007,22 +1056,19 @@ fn parse_input_report(
     Ok(())
 }
 
-fn read_events(stream: &mut impl Write, path: &Path, rdesc: &ReportDescriptor) -> Result<()> {
+fn read_events(path: &Path, rdesc: &ReportDescriptor) -> Result<()> {
     cprintln!(
-        stream,
         Styles::Separator,
         "##############################################################################"
     );
-    cprintln!(stream, Styles::None, "# Recorded events below in format:");
+    cprintln!(Styles::None, "# Recorded events below in format:");
     cprintln!(
-        stream,
         Styles::None,
         "# E: <seconds>.<microseconds> <length-in-bytes> [bytes ...]",
     );
-    cprintln!(stream, Styles::None, "#");
+    cprintln!(Styles::None, "#");
 
     cprintln!(
-        stream,
         Styles::Timestamp,
         "# Current time: {}",
         chrono::prelude::Local::now().format("%H:%M:%S").to_string()
@@ -1051,7 +1097,6 @@ fn read_events(stream: &mut impl Write, path: &Path, rdesc: &ReportDescriptor) -
                     let elapsed = last_timestamp.or(start_time).unwrap().elapsed();
                     if elapsed.as_secs() > 5 {
                         cprintln!(
-                            stream,
                             Styles::Timestamp,
                             "# Current time: {}",
                             chrono::prelude::Local::now().format("%H:%M:%S").to_string()
@@ -1059,7 +1104,7 @@ fn read_events(stream: &mut impl Write, path: &Path, rdesc: &ReportDescriptor) -
                         last_timestamp = Some(Instant::now());
                     }
 
-                    parse_input_report(stream, &data, rdesc, &start_time.unwrap())?;
+                    parse_input_report(&data, rdesc, &start_time.unwrap())?;
                 }
                 Err(e) => {
                     if e.kind() != std::io::ErrorKind::WouldBlock {
@@ -1104,19 +1149,7 @@ fn find_device() -> Result<PathBuf> {
 fn hid_recorder() -> Result<()> {
     let cli = Cli::parse();
 
-    let mut stream: Box<dyn Write> = if cli.output_file == "-" {
-        // Bit lame but easier to just set the env for owo_colors to figure out the rest
-        match cli.color {
-            ColorChoice::Never => std::env::set_var("NO_COLOR", "1"),
-            ColorChoice::Auto => {}
-            ColorChoice::Always => std::env::set_var("FORCE_COLOR", "1"),
-        }
-
-        Box::new(std::io::stdout())
-    } else {
-        std::env::set_var("NO_COLOR", "1");
-        Box::new(std::fs::File::create(cli.output_file).unwrap())
-    };
+    let _ = Outfile::init(&cli);
 
     let path = match cli.path {
         Some(path) => path,
@@ -1126,9 +1159,9 @@ fn hid_recorder() -> Result<()> {
     let rdesc_file = find_rdesc(&path)?;
     let opts = Options { full: cli.full };
 
-    let rdesc = parse(&mut stream, &rdesc_file, &opts)?;
+    let rdesc = parse(&rdesc_file, &opts)?;
     if !cli.only_describe && path.starts_with("/dev") {
-        read_events(&mut stream, &path, &rdesc)?
+        read_events(&path, &rdesc)?
     }
     Ok(())
 }
@@ -1198,9 +1231,8 @@ mod tests {
             .map(|h| PathBuf::from("/dev/").join(h))
             .map(|path| find_rdesc(&path).unwrap())
         {
-            let mut buf = std::io::BufWriter::new(Vec::new());
             let opts = Options { full: true };
-            parse(&mut buf, &rdesc_file, &opts)
+            parse(&rdesc_file, &opts)
                 .unwrap_or_else(|_| panic!("Failed to parse {:?}", rdesc_file.path));
         }
     }
