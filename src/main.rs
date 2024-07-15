@@ -12,7 +12,7 @@ use std::os::fd::AsFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::OnceLock;
+use std::sync::{Once, OnceLock};
 use std::time::Instant;
 
 use hidreport::hid::{
@@ -20,6 +20,15 @@ use hidreport::hid::{
     ReportDescriptorItems,
 };
 use hidreport::*;
+
+use libbpf_rs::skel::OpenSkel as _;
+use libbpf_rs::skel::SkelBuilder as _;
+
+mod hidrecord {
+    include!(concat!(env!("OUT_DIR"), "/hidrecord.skel.rs"));
+}
+
+use hidrecord::*;
 
 static mut OUTFILE: OnceLock<
     std::sync::Mutex<std::cell::RefCell<std::io::LineWriter<std::fs::File>>>,
@@ -86,6 +95,17 @@ impl Write for Outfile {
     }
 }
 
+// A Rust version of hid_recorder_event in hidrecord.bpf.c
+// struct hid_recorder_event {
+// 	__u8 length;
+// 	__u8 data[64];
+// };
+#[repr(C)]
+struct hid_recorder_event {
+    length: u8,
+    data: [u8; 64],
+}
+
 #[derive(Default)]
 enum Styles {
     #[default]
@@ -101,12 +121,14 @@ enum Styles {
     Report {
         report_id: ReportId,
     },
+    Bpf,
 }
 
 impl Styles {
     fn style(&self) -> Style {
         match self {
             Styles::None => Style::new(),
+            Styles::Bpf => Style::new().blue(),
             Styles::Data => Style::new().red(),
             Styles::Note => Style::new().red().bold(),
             Styles::InputItem => Style::new().green().bold(),
@@ -990,7 +1012,12 @@ fn print_field_values(bytes: &[u8], field: &Field) {
     }
 }
 
-fn parse_input_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Instant) -> Result<()> {
+fn parse_input_report(
+    bytes: &[u8],
+    rdesc: &ReportDescriptor,
+    start_time: &Instant,
+    ringbuf: &libbpf_rs::RingBuffer,
+) -> Result<()> {
     let Some(report) = rdesc.find_input_report(bytes) else {
         bail!("Unable to find matching report");
     };
@@ -1036,6 +1063,8 @@ fn parse_input_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Insta
         }
     }
 
+    let _ = ringbuf.consume();
+
     let elapsed = start_time.elapsed();
 
     cprintln!(
@@ -1067,7 +1096,7 @@ fn print_current_time(last_timestamp: Option<Instant>) -> Option<Instant> {
     }
 }
 
-fn read_events(path: &Path, rdesc: &ReportDescriptor) -> Result<()> {
+fn read_events(path: &Path, rdesc: &ReportDescriptor, map_ringbuf: &libbpf_rs::Map) -> Result<()> {
     cprintln!(
         Styles::Separator,
         "##############################################################################"
@@ -1088,8 +1117,20 @@ fn read_events(path: &Path, rdesc: &ReportDescriptor) -> Result<()> {
     let mut start_time: Option<Instant> = None;
     let mut last_timestamp: Option<Instant> = None;
     let mut data = [0; 1024];
+
+    let mut builder = libbpf_rs::RingBufferBuilder::new();
+    builder.add(map_ringbuf, event_handler).unwrap();
+    let ringbuf = builder.build().unwrap();
+
     loop {
-        let mut pollfds = [PollFd::new(f.as_fd(), PollFlags::POLLIN)];
+        let ringbuf_fd = unsafe {
+            std::os::fd::BorrowedFd::borrow_raw(ringbuf.epoll_fd() as std::os::fd::RawFd)
+        };
+        let mut pollfds = [
+            PollFd::new(f.as_fd(), PollFlags::POLLIN),
+            PollFd::new(ringbuf_fd, PollFlags::POLLIN),
+        ];
+
         if poll(&mut pollfds, timeout)? > 0 {
             match f.read(&mut data) {
                 Ok(_nbytes) => {
@@ -1097,11 +1138,17 @@ fn read_events(path: &Path, rdesc: &ReportDescriptor) -> Result<()> {
                     if start_time.is_none() {
                         start_time = last_timestamp;
                     }
-                    parse_input_report(&data, rdesc, &start_time.unwrap())?;
+                    parse_input_report(&data, rdesc, &start_time.unwrap(), &ringbuf)?;
                 }
                 Err(e) => {
                     if e.kind() != std::io::ErrorKind::WouldBlock {
                         bail!(e);
+                    } else {
+                        last_timestamp = print_current_time(last_timestamp);
+                        if start_time.is_none() {
+                            start_time = last_timestamp;
+                        }
+                        let _ = ringbuf.consume();
                     }
                 }
             };
@@ -1139,6 +1186,48 @@ fn find_device() -> Result<PathBuf> {
     Ok(path)
 }
 
+fn event_handler(data: &[u8]) -> ::std::os::raw::c_int {
+    static START_TIME_ONCE: Once = Once::new();
+    static mut START_TIME: Option<Instant> = None;
+
+    if data.len() != std::mem::size_of::<hid_recorder_event>() {
+        eprintln!(
+            "Invalid size {} != {}",
+            data.len(),
+            std::mem::size_of::<hid_recorder_event>()
+        );
+        return 1;
+    }
+
+    let event = unsafe { &*(data.as_ptr() as *const hid_recorder_event) };
+
+    if event.length == 0 {
+        return 1;
+    }
+
+    let elapsed = unsafe {
+        START_TIME_ONCE.call_once(|| {
+            START_TIME = Some(Instant::now());
+        });
+        START_TIME
+    }
+    .unwrap()
+    .elapsed();
+
+    let size = event.length as usize;
+    cprintln!(
+        Styles::Bpf,
+        "B: {:06}.{:06} {} {}",
+        elapsed.as_secs(),
+        elapsed.as_micros() % 1000000,
+        event.length,
+        event.data[..size]
+            .iter()
+            .fold("".to_string(), |acc, b| format!("{acc}{b:02x} "))
+    );
+    0
+}
+
 fn hid_recorder() -> Result<()> {
     let cli = Cli::parse();
 
@@ -1149,12 +1238,35 @@ fn hid_recorder() -> Result<()> {
         None => find_device()?,
     };
 
+    let sysfs = find_sysfs_path(&path)?.canonicalize()?;
+    let hid_id = u32::from_str_radix(
+        sysfs
+            .extension()
+            .unwrap()
+            .to_str()
+            .expect("not a hex value"),
+        16,
+    )
+    .unwrap();
+
+    let skel_builder = HidrecordSkelBuilder::default();
+    let mut open_skel = skel_builder.open().unwrap();
+    let hid_record_update = open_skel.struct_ops.hid_record_mut();
+    hid_record_update.hid_id = hid_id as i32;
+
+    let skel = open_skel.load()?;
+
+    let maps = skel.maps();
+
+    // We need to keep _link around or the program gets immediately removed
+    let _link = maps.hid_record().attach_struct_ops()?;
+
     let rdesc_file = find_rdesc(&path)?;
     let opts = Options { full: cli.full };
 
     let rdesc = parse(&rdesc_file, &opts)?;
     if !cli.only_describe && path.starts_with("/dev") {
-        read_events(&path, &rdesc)?
+        read_events(&path, &rdesc, maps.events())?
     }
     Ok(())
 }
