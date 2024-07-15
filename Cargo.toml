@@ -6,6 +6,7 @@ license = "MIT"
 homepage = "https://github.com/hidutils"
 repository = "https://github.com/hidutils/hid-recorder"
 description = "HID Report recorder utility"
+rust-version = "1.70"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
