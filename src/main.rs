@@ -1056,6 +1056,21 @@ fn parse_input_report(bytes: &[u8], rdesc: &ReportDescriptor, start_time: &Insta
     Ok(())
 }
 
+fn print_current_time(last_timestamp: Option<Instant>) -> Option<Instant> {
+    let prev_timestamp = last_timestamp.unwrap_or(Instant::now());
+
+    if last_timestamp.is_none() || prev_timestamp.elapsed().as_secs() > 5 {
+        cprintln!(
+            Styles::Timestamp,
+            "# Current time: {}",
+            chrono::prelude::Local::now().format("%H:%M:%S").to_string()
+        );
+        Some(Instant::now())
+    } else {
+        last_timestamp
+    }
+}
+
 fn read_events(path: &Path, rdesc: &ReportDescriptor) -> Result<()> {
     cprintln!(
         Styles::Separator,
@@ -1067,12 +1082,6 @@ fn read_events(path: &Path, rdesc: &ReportDescriptor) -> Result<()> {
         "# E: <seconds>.<microseconds> <length-in-bytes> [bytes ...]",
     );
     cprintln!(Styles::None, "#");
-
-    cprintln!(
-        Styles::Timestamp,
-        "# Current time: {}",
-        chrono::prelude::Local::now().format("%H:%M:%S").to_string()
-    );
 
     let mut f = OpenOptions::new()
         .read(true)
@@ -1088,22 +1097,10 @@ fn read_events(path: &Path, rdesc: &ReportDescriptor) -> Result<()> {
         if poll(&mut pollfds, timeout)? > 0 {
             match f.read(&mut data) {
                 Ok(_nbytes) => {
-                    start_time = if start_time.is_none() {
-                        Some(Instant::now())
-                    } else {
-                        start_time
-                    };
-
-                    let elapsed = last_timestamp.or(start_time).unwrap().elapsed();
-                    if elapsed.as_secs() > 5 {
-                        cprintln!(
-                            Styles::Timestamp,
-                            "# Current time: {}",
-                            chrono::prelude::Local::now().format("%H:%M:%S").to_string()
-                        );
-                        last_timestamp = Some(Instant::now());
+                    last_timestamp = print_current_time(last_timestamp);
+                    if start_time.is_none() {
+                        start_time = last_timestamp;
                     }
-
                     parse_input_report(&data, rdesc, &start_time.unwrap())?;
                 }
                 Err(e) => {
