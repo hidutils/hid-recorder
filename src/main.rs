@@ -117,63 +117,62 @@ struct RDescFile {
 }
 
 fn fmt_main_item(item: &MainItem) -> String {
-    match item {
+    let (prefix, details) = match item {
         MainItem::Input(i) => {
-            format!(
-                "Input ({},{},{}{}{}{}{}{})",
+            let details = vec![
                 if i.is_constant() { "Cnst" } else { "Data" },
                 if i.is_variable() { "Var" } else { "Arr" },
                 if i.is_relative() { "Rel" } else { "Abs" },
                 if i.wraps() { ",Wrap" } else { "" },
                 if i.is_nonlinear() { ",NonLin" } else { "" },
                 if i.has_no_preferred_state() {
-                    ",NoPref"
+                    "NoPref"
                 } else {
                     ""
                 },
-                if i.has_null_state() { ",Null" } else { "" },
-                if i.is_buffered_bytes() { ",Buff" } else { "" }
-            )
+                if i.has_null_state() { "Null" } else { "" },
+                if i.is_buffered_bytes() { "Buff" } else { "" },
+            ];
+            ("Input", details)
         }
         MainItem::Output(i) => {
-            format!(
-                "Output ({},{},{}{}{}{}{}{}{})",
+            let details = vec![
                 if i.is_constant() { "Cnst" } else { "Data" },
                 if i.is_variable() { "Var" } else { "Arr" },
                 if i.is_relative() { "Rel" } else { "Abs" },
                 if i.wraps() { ",Wrap" } else { "" },
                 if i.is_nonlinear() { ",NonLin" } else { "" },
                 if i.has_no_preferred_state() {
-                    ",NoPref"
+                    "NoPref"
                 } else {
                     ""
                 },
-                if i.has_null_state() { ",Null" } else { "" },
-                if i.is_volatile() { ",Vol" } else { "" },
-                if i.is_buffered_bytes() { ",Buff" } else { "" }
-            )
+                if i.has_null_state() { "Null" } else { "" },
+                if i.is_volatile() { "Vol" } else { "" },
+                if i.is_buffered_bytes() { "Buff" } else { "" },
+            ];
+            ("Output", details)
         }
         MainItem::Feature(i) => {
-            format!(
-                "Feature ({},{},{}{}{}{}{}{}{})",
+            let details = vec![
                 if i.is_constant() { "Cnst" } else { "Data" },
                 if i.is_variable() { "Var" } else { "Arr" },
                 if i.is_relative() { "Rel" } else { "Abs" },
-                if i.wraps() { ",Wrap" } else { "" },
-                if i.is_nonlinear() { ",NonLin" } else { "" },
+                if i.wraps() { "Wrap" } else { "" },
+                if i.is_nonlinear() { "NonLin" } else { "" },
                 if i.has_no_preferred_state() {
-                    ",NoPref"
+                    "NoPref"
                 } else {
                     ""
                 },
-                if i.has_null_state() { ",Null" } else { "" },
-                if i.is_volatile() { ",Vol" } else { "" },
-                if i.is_buffered_bytes() { ",Buff" } else { "" }
-            )
+                if i.has_null_state() { "Null" } else { "" },
+                if i.is_volatile() { "Vol" } else { "" },
+                if i.is_buffered_bytes() { "Buff" } else { "" },
+            ];
+            ("Feature", details)
         }
-        MainItem::Collection(c) => format!(
-            "Collection ({})",
-            match c {
+        MainItem::Collection(c) => {
+            let details = vec![match c {
                 CollectionItem::Physical => "Physical",
                 CollectionItem::Application => "Application",
                 CollectionItem::Logical => "Logical",
@@ -183,10 +182,19 @@ fn fmt_main_item(item: &MainItem) -> String {
                 CollectionItem::UsageModifier => "UsageModifier",
                 CollectionItem::Reserved { .. } => "Reserved",
                 CollectionItem::VendorDefined { .. } => "VendorDefined",
-            },
-        ),
-        MainItem::EndCollection => "End Collection".into(),
-    }
+            }];
+            ("Collection", details)
+        }
+        MainItem::EndCollection => return String::from("End Collection"),
+    };
+
+    let details = details
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect::<Vec<String>>()
+        .join(",");
+    format!("{prefix} ({details})")
 }
 
 fn fmt_global_item(item: &GlobalItem) -> String {
