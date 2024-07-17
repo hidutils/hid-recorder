@@ -435,8 +435,8 @@ fn physical_range_to_str(
 
 fn unit_to_str(unit: &Option<Unit>) -> Option<String> {
     if let Some(u) = unit {
-        if let Some(units) = u.units() {
-            Some(format!(
+        u.units().map(|units| {
+            format!(
                 "Unit: {:?}{}{}",
                 u.system(),
                 match u.system() {
@@ -448,10 +448,8 @@ fn unit_to_str(unit: &Option<Unit>) -> Option<String> {
                     .map(|u| format!("{u}"))
                     .collect::<Vec<String>>()
                     .join("")
-            ))
-        } else {
-            None
-        }
+            )
+        })
     } else {
         None
     }
@@ -511,7 +509,7 @@ struct PrintableRow {
 }
 
 impl PrintableRow {
-    fn columns<'a>(&'a self) -> impl Iterator<Item = &'a PrintableColumn> {
+    fn columns(&self) -> impl Iterator<Item = &'_ PrintableColumn> {
         vec![
             &self.bits,
             &self.usage,
@@ -612,7 +610,7 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
     let mut table = PrintableTable::default();
     for field in r.fields() {
         let mut row = PrintableRow::default();
-        row.bits = PrintableColumn::from(bits_to_str(&field.bits()));
+        row.bits = PrintableColumn::from(bits_to_str(field.bits()));
         if !opts.full && is_vendor_or_reserved_field(field) {
             vendor_report_count += 1;
         } else {
@@ -669,7 +667,7 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
                 usages.for_each(|u| {
                     let row = PrintableRow {
                         bits: PrintableColumn::from(" "),
-                        usage: PrintableColumn::from(usage_to_str(&u)),
+                        usage: PrintableColumn::from(usage_to_str(u)),
                         ..Default::default()
                     };
                     table.add(row);
@@ -748,7 +746,7 @@ fn parse_uevent(sysfs: &Path) -> Result<(String, (u32, u32, u32))> {
 }
 
 fn find_rdesc(path: &Path) -> Result<RDescFile> {
-    if vec!["/dev", "/sys"]
+    if ["/dev", "/sys"]
         .iter()
         .any(|prefix| path.starts_with(prefix))
     {
@@ -1201,7 +1199,7 @@ mod tests {
             let mut buf = std::io::BufWriter::new(Vec::new());
             let opts = Options { full: true };
             parse(&mut buf, &rdesc_file, &opts)
-                .expect(&format!("Failed to parse {:?}", rdesc_file.path));
+                .unwrap_or_else(|_| panic!("Failed to parse {:?}", rdesc_file.path));
         }
     }
 }
