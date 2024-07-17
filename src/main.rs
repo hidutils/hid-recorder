@@ -15,6 +15,9 @@ use std::process::ExitCode;
 use std::sync::{Once, OnceLock};
 use std::time::Instant;
 
+// we reuse ColorChoice for your `--bpf` argument
+use clap::ColorChoice as BpfOption;
+
 use hidreport::hid::{
     CollectionItem, GlobalItem, Item, ItemType, LocalItem, MainDataItem, MainItem,
     ReportDescriptorItems,
@@ -195,9 +198,11 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     only_describe: bool,
 
-    /// Also grab the events from the device through HID-BPF.
-    #[arg(long, default_value_t = false)]
-    bpf: bool,
+    /// Also grab the events from the device through HID-BPF
+    /// (default to enable the output if a HID-BPF program
+    /// is detected on the target device).
+    #[arg(long, default_value_t = BpfOption::Auto)]
+    bpf: BpfOption,
 
     /// Path to the hidraw or event device node, or a binary
     /// hid descriptor file
@@ -1240,11 +1245,7 @@ fn event_handler(data: &[u8]) -> ::std::os::raw::c_int {
     0
 }
 
-fn preload_bpf_tracer(use_bpf: bool, path: &Path) -> Result<Option<HidrecordSkel<'static>>> {
-    if !use_bpf {
-        return Ok(None);
-    }
-
+fn preload_bpf_tracer(use_bpf: BpfOption, path: &Path) -> Result<Option<HidrecordSkel<'static>>> {
     let sysfs = find_sysfs_path(path)?.canonicalize()?;
     let hid_id = u32::from_str_radix(
         sysfs
@@ -1255,6 +1256,25 @@ fn preload_bpf_tracer(use_bpf: bool, path: &Path) -> Result<Option<HidrecordSkel
         16,
     )
     .unwrap();
+
+    let sysfs_name = sysfs
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .replace([':', '.'], "_");
+
+    let bpffs = PathBuf::from("/sys/fs/bpf/hid/").join(sysfs_name);
+
+    let enable_bpf = match use_bpf {
+        BpfOption::Never => false,
+        BpfOption::Always => true,
+        BpfOption::Auto => bpffs.exists(),
+    };
+
+    if !enable_bpf {
+        return Ok(None);
+    }
 
     let skel_builder = HidrecordSkelBuilder::default();
     let mut open_skel = skel_builder.open().unwrap();
