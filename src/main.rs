@@ -609,8 +609,10 @@ fn print_report_summary(stream: &mut impl Write, r: &impl Report, opts: &Options
     let mut vendor_report_count = 0;
     let mut table = PrintableTable::default();
     for field in r.fields() {
-        let mut row = PrintableRow::default();
-        row.bits = PrintableColumn::from(bits_to_str(field.bits()));
+        let mut row = PrintableRow {
+            bits: PrintableColumn::from(bits_to_str(field.bits())),
+            ..Default::default()
+        };
         if !opts.full && is_vendor_or_reserved_field(field) {
             vendor_report_count += 1;
         } else {
