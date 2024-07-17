@@ -195,6 +195,10 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     only_describe: bool,
 
+    /// Also grab the events from the device through HID-BPF.
+    #[arg(long, default_value_t = false)]
+    bpf: bool,
+
     /// Path to the hidraw or event device node, or a binary
     /// hid descriptor file
     path: Option<PathBuf>,
@@ -1016,7 +1020,7 @@ fn parse_input_report(
     bytes: &[u8],
     rdesc: &ReportDescriptor,
     start_time: &Instant,
-    ringbuf: &libbpf_rs::RingBuffer,
+    ringbuf: Option<&libbpf_rs::RingBuffer>,
 ) -> Result<()> {
     let Some(report) = rdesc.find_input_report(bytes) else {
         bail!("Unable to find matching report");
@@ -1063,7 +1067,9 @@ fn parse_input_report(
         }
     }
 
-    let _ = ringbuf.consume();
+    if let Some(ringbuf) = ringbuf {
+        let _ = ringbuf.consume();
+    }
 
     let elapsed = start_time.elapsed();
 
@@ -1096,7 +1102,11 @@ fn print_current_time(last_timestamp: Option<Instant>) -> Option<Instant> {
     }
 }
 
-fn read_events(path: &Path, rdesc: &ReportDescriptor, map_ringbuf: &libbpf_rs::Map) -> Result<()> {
+fn read_events(
+    path: &Path,
+    rdesc: &ReportDescriptor,
+    map_ringbuf: Option<&libbpf_rs::Map>,
+) -> Result<()> {
     cprintln!(
         Styles::Separator,
         "##############################################################################"
@@ -1118,18 +1128,20 @@ fn read_events(path: &Path, rdesc: &ReportDescriptor, map_ringbuf: &libbpf_rs::M
     let mut last_timestamp: Option<Instant> = None;
     let mut data = [0; 1024];
 
-    let mut builder = libbpf_rs::RingBufferBuilder::new();
-    builder.add(map_ringbuf, event_handler).unwrap();
-    let ringbuf = builder.build().unwrap();
+    let ringbuf = map_ringbuf.map(|map_ringbuf| {
+        let mut builder = libbpf_rs::RingBufferBuilder::new();
+        builder.add(map_ringbuf, event_handler).unwrap();
+        builder.build().unwrap()
+    });
 
     loop {
-        let ringbuf_fd = unsafe {
-            std::os::fd::BorrowedFd::borrow_raw(ringbuf.epoll_fd() as std::os::fd::RawFd)
-        };
-        let mut pollfds = [
-            PollFd::new(f.as_fd(), PollFlags::POLLIN),
-            PollFd::new(ringbuf_fd, PollFlags::POLLIN),
-        ];
+        let mut pollfds = vec![PollFd::new(f.as_fd(), PollFlags::POLLIN)];
+        if let Some(ref ringbuf) = ringbuf {
+            let ringbuf_fd = unsafe {
+                std::os::fd::BorrowedFd::borrow_raw(ringbuf.epoll_fd() as std::os::fd::RawFd)
+            };
+            pollfds.push(PollFd::new(ringbuf_fd, PollFlags::POLLIN));
+        }
 
         if poll(&mut pollfds, timeout)? > 0 {
             match f.read(&mut data) {
@@ -1138,12 +1150,12 @@ fn read_events(path: &Path, rdesc: &ReportDescriptor, map_ringbuf: &libbpf_rs::M
                     if start_time.is_none() {
                         start_time = last_timestamp;
                     }
-                    parse_input_report(&data, rdesc, &start_time.unwrap(), &ringbuf)?;
+                    parse_input_report(&data, rdesc, &start_time.unwrap(), ringbuf.as_ref())?;
                 }
                 Err(e) => {
                     if e.kind() != std::io::ErrorKind::WouldBlock {
                         bail!(e);
-                    } else {
+                    } else if let Some(ref ringbuf) = ringbuf {
                         last_timestamp = print_current_time(last_timestamp);
                         if start_time.is_none() {
                             start_time = last_timestamp;
@@ -1228,17 +1240,12 @@ fn event_handler(data: &[u8]) -> ::std::os::raw::c_int {
     0
 }
 
-fn hid_recorder() -> Result<()> {
-    let cli = Cli::parse();
+fn preload_bpf_tracer(use_bpf: bool, path: &Path) -> Result<Option<HidrecordSkel<'static>>> {
+    if !use_bpf {
+        return Ok(None);
+    }
 
-    let _ = Outfile::init(&cli);
-
-    let path = match cli.path {
-        Some(path) => path,
-        None => find_device()?,
-    };
-
-    let sysfs = find_sysfs_path(&path)?.canonicalize()?;
+    let sysfs = find_sysfs_path(path)?.canonicalize()?;
     let hid_id = u32::from_str_radix(
         sysfs
             .extension()
@@ -1254,19 +1261,33 @@ fn hid_recorder() -> Result<()> {
     let hid_record_update = open_skel.struct_ops.hid_record_mut();
     hid_record_update.hid_id = hid_id as i32;
 
-    let skel = open_skel.load()?;
+    Ok(Some(open_skel.load()?))
+}
 
-    let maps = skel.maps();
+fn hid_recorder() -> Result<()> {
+    let cli = Cli::parse();
 
-    // We need to keep _link around or the program gets immediately removed
-    let _link = maps.hid_record().attach_struct_ops()?;
+    let _ = Outfile::init(&cli);
+
+    let path = match cli.path {
+        Some(path) => path,
+        None => find_device()?,
+    };
 
     let rdesc_file = find_rdesc(&path)?;
     let opts = Options { full: cli.full };
 
     let rdesc = parse(&rdesc_file, &opts)?;
     if !cli.only_describe && path.starts_with("/dev") {
-        read_events(&path, &rdesc, maps.events())?
+        match preload_bpf_tracer(cli.bpf, &path)? {
+            None => read_events(&path, &rdesc, None)?,
+            Some(skel) => {
+                let maps = skel.maps();
+                // We need to keep _link around or the program gets immediately removed
+                let _link = maps.hid_record().attach_struct_ops()?;
+                read_events(&path, &rdesc, Some(maps.events()))?
+            }
+        }
     }
     Ok(())
 }
