@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::ops::Deref;
-use std::os::fd::AsFd;
+use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -24,14 +24,19 @@ use hidreport::hid::{
 };
 use hidreport::*;
 
+use libbpf_rs::libbpf_sys;
 use libbpf_rs::skel::OpenSkel as _;
 use libbpf_rs::skel::SkelBuilder as _;
 
 mod hidrecord {
     include!(concat!(env!("OUT_DIR"), "/hidrecord.skel.rs"));
 }
+mod hidrecord_tracing {
+    include!(concat!(env!("OUT_DIR"), "/hidrecord_tracing.skel.rs"));
+}
 
 use hidrecord::*;
+use hidrecord_tracing::*;
 
 static mut OUTFILE: OnceLock<
     std::sync::Mutex<std::cell::RefCell<std::io::LineWriter<std::fs::File>>>,
@@ -107,6 +112,19 @@ impl Write for Outfile {
 struct hid_recorder_event {
     length: u8,
     data: [u8; 64],
+}
+
+// A Rust version of attach_prog_args in hidrecord_tracing.bpf.c
+// struct attach_prog_args {
+// 	int prog_fd;
+// 	unsigned int hid;
+// 	int retval;
+// };
+#[repr(C)]
+struct attach_prog_args {
+    prog_fd: i32,
+    hid: u32,
+    retval: i32,
 }
 
 #[derive(Default)]
@@ -219,6 +237,31 @@ struct RDescFile {
     bustype: u32,
     vid: u32,
     pid: u32,
+}
+
+#[derive(Debug)]
+pub enum BpfError {
+    LibBPFError { error: libbpf_rs::Error },
+    OsError { errno: u32 },
+}
+
+impl std::error::Error for BpfError {}
+
+impl std::fmt::Display for BpfError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BpfError::LibBPFError { error } => write!(f, "{error}"),
+            BpfError::OsError { errno } => {
+                write!(f, "{}", libbpf_rs::Error::from_raw_os_error(*errno as i32))
+            }
+        }
+    }
+}
+
+impl From<libbpf_rs::Error> for BpfError {
+    fn from(e: libbpf_rs::Error) -> BpfError {
+        BpfError::LibBPFError { error: e }
+    }
 }
 
 fn fmt_main_item(item: &MainItem) -> String {
@@ -1245,7 +1288,30 @@ fn event_handler(data: &[u8]) -> ::std::os::raw::c_int {
     0
 }
 
-fn preload_bpf_tracer(use_bpf: BpfOption, path: &Path) -> Result<Option<HidrecordSkel<'static>>> {
+enum HidBpfSkel {
+    None,
+    StructOps(Box<HidrecordSkel<'static>>),
+    Tracing(Box<HidrecordTracingSkel<'static>>, u32),
+}
+
+fn print_to_log(level: libbpf_rs::PrintLevel, msg: String) {
+    /* we strip out the 3 following lines that happen when the kernel
+     * doesn't support HID-BPF struct_ops
+     */
+    if msg.contains("struct bpf_struct_ops_hid_bpf_ops is not found in kernel BTF")
+        || msg.contains("failed to load object 'hidrecord_bpf'")
+        || msg.contains("failed to load BPF skeleton 'hidrecord_bpf': -2")
+    {
+        return;
+    }
+    match level {
+        libbpf_rs::PrintLevel::Info => cprintln!(Styles::Bpf, "{}", msg.trim()),
+        libbpf_rs::PrintLevel::Warn => cprintln!(Styles::Note, "{}", msg.trim()),
+        _ => (),
+    }
+}
+
+fn preload_bpf_tracer(use_bpf: BpfOption, path: &Path) -> Result<HidBpfSkel> {
     let sysfs = find_sysfs_path(path)?.canonicalize()?;
     let hid_id = u32::from_str_radix(
         sysfs
@@ -1273,15 +1339,57 @@ fn preload_bpf_tracer(use_bpf: BpfOption, path: &Path) -> Result<Option<Hidrecor
     };
 
     if !enable_bpf {
-        return Ok(None);
+        return Ok(HidBpfSkel::None);
     }
+
+    libbpf_rs::set_print(Some((libbpf_rs::PrintLevel::Info, print_to_log)));
 
     let skel_builder = HidrecordSkelBuilder::default();
     let mut open_skel = skel_builder.open().unwrap();
     let hid_record_update = open_skel.struct_ops.hid_record_mut();
     hid_record_update.hid_id = hid_id as i32;
 
-    Ok(Some(open_skel.load()?))
+    if let Ok(skel) = open_skel.load() {
+        return Ok(HidBpfSkel::StructOps(Box::new(skel)));
+    }
+
+    let skel_builder = HidrecordTracingSkelBuilder::default();
+    let skel = skel_builder.open()?.load()?;
+    Ok(HidBpfSkel::Tracing(Box::new(skel), hid_id))
+}
+
+fn run_syscall_prog_generic<T>(prog: &libbpf_rs::Program, data: T) -> Result<T, BpfError> {
+    let fd = prog.as_fd().as_raw_fd();
+    let data_ptr: *const libc::c_void = &data as *const _ as *const libc::c_void;
+    let mut run_opts = libbpf_sys::bpf_test_run_opts {
+        sz: std::mem::size_of::<libbpf_sys::bpf_test_run_opts>()
+            .try_into()
+            .unwrap(),
+        ctx_in: data_ptr,
+        ctx_size_in: std::mem::size_of::<T>() as u32,
+        ..Default::default()
+    };
+
+    let run_opts_ptr: *mut libbpf_sys::bpf_test_run_opts = &mut run_opts;
+
+    match unsafe { libbpf_sys::bpf_prog_test_run_opts(fd, run_opts_ptr) } {
+        0 => Ok(data),
+        e => Err(BpfError::OsError { errno: -e as u32 }),
+    }
+}
+
+fn run_syscall_prog_attach(
+    prog: &libbpf_rs::Program,
+    attach_args: attach_prog_args,
+) -> Result<i32, BpfError> {
+    let args = run_syscall_prog_generic(prog, attach_args)?;
+    if args.retval < 0 {
+        Err(BpfError::OsError {
+            errno: -args.retval as u32,
+        })
+    } else {
+        Ok(args.retval)
+    }
 }
 
 fn hid_recorder() -> Result<()> {
@@ -1300,12 +1408,23 @@ fn hid_recorder() -> Result<()> {
     let rdesc = parse(&rdesc_file, &opts)?;
     if !cli.only_describe && path.starts_with("/dev") {
         match preload_bpf_tracer(cli.bpf, &path)? {
-            None => read_events(&path, &rdesc, None)?,
-            Some(skel) => {
+            HidBpfSkel::None => read_events(&path, &rdesc, None)?,
+            HidBpfSkel::StructOps(skel) => {
                 let maps = skel.maps();
                 // We need to keep _link around or the program gets immediately removed
                 let _link = maps.hid_record().attach_struct_ops()?;
                 read_events(&path, &rdesc, Some(maps.events()))?
+            }
+            HidBpfSkel::Tracing(skel, hid_id) => {
+                let attach_args = attach_prog_args {
+                    prog_fd: skel.progs().hid_record_event().as_fd().as_raw_fd(),
+                    hid: hid_id,
+                    retval: -1,
+                };
+
+                let _link =
+                    run_syscall_prog_attach(skel.progs().attach_prog(), attach_args).unwrap();
+                read_events(&path, &rdesc, Some(skel.maps().events()))?
             }
         }
     }
