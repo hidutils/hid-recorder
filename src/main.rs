@@ -103,6 +103,8 @@ impl Write for Outfile {
     }
 }
 
+const PACKET_SIZE: usize = 64;
+
 // A Rust version of hid_recorder_event in hidrecord.bpf.c
 // struct hid_recorder_event {
 // 	__u8 length;
@@ -110,8 +112,10 @@ impl Write for Outfile {
 // };
 #[repr(C)]
 struct hid_recorder_event {
+    packet_count: u8,
+    packet_number: u8,
     length: u8,
-    data: [u8; 64],
+    data: [u8; PACKET_SIZE],
 }
 
 // A Rust version of attach_prog_args in hidrecord_tracing.bpf.c
@@ -1175,10 +1179,13 @@ fn read_events(
     let mut start_time: Option<Instant> = None;
     let mut last_timestamp: Option<Instant> = None;
     let mut data = [0; 1024];
+    let mut bpf_vec = Vec::new();
 
     let ringbuf = map_ringbuf.map(|map_ringbuf| {
         let mut builder = libbpf_rs::RingBufferBuilder::new();
-        builder.add(map_ringbuf, event_handler).unwrap();
+        builder
+            .add(map_ringbuf, |data| event_handler(data, &mut bpf_vec))
+            .unwrap();
         builder.build().unwrap()
     });
 
@@ -1246,7 +1253,7 @@ fn find_device() -> Result<PathBuf> {
     Ok(path)
 }
 
-fn event_handler(data: &[u8]) -> ::std::os::raw::c_int {
+fn event_handler(data: &[u8], buffer: &mut Vec<u8>) -> ::std::os::raw::c_int {
     static START_TIME_ONCE: Once = Once::new();
     static mut START_TIME: Option<Instant> = None;
 
@@ -1274,17 +1281,31 @@ fn event_handler(data: &[u8]) -> ::std::os::raw::c_int {
     .unwrap()
     .elapsed();
 
-    let size = event.length as usize;
-    cprintln!(
-        Styles::Bpf,
-        "B: {:06}.{:06} {} {}",
-        elapsed.as_secs(),
-        elapsed.as_micros() % 1000000,
-        event.length,
-        event.data[..size]
+    let size = if event.packet_number == event.packet_count - 1 {
+        event.length as usize - event.packet_number as usize * PACKET_SIZE
+    } else {
+        PACKET_SIZE
+    };
+
+    if event.packet_number == 0 {
+        buffer.clear();
+    }
+
+    buffer.extend_from_slice(&event.data[..size]);
+
+    if event.packet_number == event.packet_count - 1 {
+        let bytes = buffer
             .iter()
-            .fold("".to_string(), |acc, b| format!("{acc}{b:02x} "))
-    );
+            .fold("".to_string(), |acc, b| format!("{acc}{b:02x} "));
+        cprintln!(
+            Styles::Bpf,
+            "B: {:06}.{:06} {} {}",
+            elapsed.as_secs(),
+            elapsed.as_micros() % 1000000,
+            buffer.len(),
+            bytes,
+        );
+    }
     0
 }
 
