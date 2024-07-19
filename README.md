@@ -9,6 +9,17 @@ This is a Rust reimplementation of hid-recorder from
 
 # Installation
 
+A pre-built binary is available for our
+[releases](https://github.com/hidutils/hid-recorder/releases). Simply download the
+`hid-recorder.zip`, unpack it and you are good to go:
+```
+$ unzip hid-recorder.zip
+$ chmod +x hid-recorder
+$ sudo ./hid-recorder
+```
+
+## Installation with `cargo`
+
 The easiest is to install with cargo:
 
 ```

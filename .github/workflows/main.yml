@@ -2,7 +2,7 @@ name: test suite
 on: [push, pull_request]
 
 jobs:
-  test:
+  build-and-test:
     name: cargo test
     runs-on: ubuntu-latest
     steps:
@@ -17,3 +17,33 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo fmt --check
+
+  release-build:
+     name: cargo build --release
+     runs-on: ubuntu-22.04
+     needs: [build-and-test]
+     steps:
+       - uses: actions/checkout@v4
+       - uses: dtolnay/rust-toolchain@stable
+       - run: cargo build --release
+       - run: cp target/release/hid-recorder .
+       - uses: actions/upload-artifact@v4
+         with:
+           name: hid-recorder
+           path: |
+             hid-recorder
+
+  create-release:
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [release-build]
+    permissions:
+      contents: write
+    steps:
+      - uses: dawidd6/action-download-artifact@v6
+        with:
+          name: hid-recorder
+          skip_unpack: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: hid-recorder.zip
