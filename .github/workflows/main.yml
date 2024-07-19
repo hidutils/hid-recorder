@@ -3,7 +3,12 @@ on: [push, pull_request]
 
 jobs:
   build-and-test:
-    name: cargo test
+    name: Cargo test on Ubuntu (clang=${{ matrix.use_clang }})
+    strategy:
+      matrix:
+        include:
+          - use_clang: false
+          - use_clang: true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -11,8 +16,15 @@ jobs:
       - name: Install dependencies on ubuntu
         run: |
           sudo apt-get update
-          sudo apt-get install llvm libelf-dev clang
-          clang --version
+          sudo apt-get install libelf-dev
+          if [ "${{ matrix.use_clang }}" == "true" ]
+          then
+            sudo apt-get install clang
+            clang --version
+          else
+            sudo apt-get remove clang
+            sudo rm -rf /usr/bin/clang*
+          fi
       - run: cargo test --all-features
 
   format:
