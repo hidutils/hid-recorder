@@ -41,24 +41,20 @@ impl Outfile {
     }
 
     fn init(cli: &Cli) -> Result<()> {
-        if cli.output_file == "-" {
-            // Bit lame but easier to just set the env for owo_colors to figure out the rest
-            match cli.color {
-                ColorChoice::Never => std::env::set_var("NO_COLOR", "1"),
-                ColorChoice::Auto => {}
-                ColorChoice::Always => std::env::set_var("FORCE_COLOR", "1"),
-            }
-
-            return Ok(());
+        // Bit lame but easier to just set the env for owo_colors to figure out the rest
+        match cli.color {
+            ColorChoice::Never => std::env::set_var("NO_COLOR", "1"),
+            ColorChoice::Auto => {}
+            ColorChoice::Always => std::env::set_var("FORCE_COLOR", "1"),
         }
-
-        std::env::set_var("NO_COLOR", "1");
-        let out = std::fs::File::create(cli.output_file.clone()).unwrap();
-        let _ = unsafe {
-            OUTFILE.set(std::sync::Mutex::new(std::cell::RefCell::new(
-                std::io::LineWriter::new(out),
-            )))
-        };
+        if cli.output_file != "-" {
+            let out = std::fs::File::create(cli.output_file.clone()).unwrap();
+            let _ = unsafe {
+                OUTFILE.set(std::sync::Mutex::new(std::cell::RefCell::new(
+                    std::io::LineWriter::new(out),
+                )))
+            };
+        }
         Ok(())
     }
 }
