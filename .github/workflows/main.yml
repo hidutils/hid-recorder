@@ -42,6 +42,10 @@ jobs:
      steps:
        - uses: actions/checkout@v4
        - uses: dtolnay/rust-toolchain@stable
+       - name: Install dependencies on ubuntu
+         run: |
+           sudo apt-get update
+           sudo apt-get install libelf-dev clang
        - run: cargo build --release
        - run: cp target/release/hid-recorder .
        - uses: actions/upload-artifact@v4
@@ -61,6 +65,10 @@ jobs:
         with:
           name: hid-recorder
           skip_unpack: true
+      - name: Install dependencies on ubuntu
+        run: |
+          sudo apt-get update
+          sudo apt-get install libelf-dev clang
       - uses: softprops/action-gh-release@v2
         with:
           files: hid-recorder.zip
