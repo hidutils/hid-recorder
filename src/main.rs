@@ -110,6 +110,7 @@ const PACKET_SIZE: usize = 64;
 // 	__u8 length;
 // 	__u8 data[64];
 // };
+#[allow(non_camel_case_types)]
 #[repr(C)]
 struct hid_recorder_event {
     packet_count: u8,
@@ -124,6 +125,7 @@ struct hid_recorder_event {
 // 	unsigned int hid;
 // 	int retval;
 // };
+#[allow(non_camel_case_types)]
 #[repr(C)]
 struct attach_prog_args {
     prog_fd: i32,
