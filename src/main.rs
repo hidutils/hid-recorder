@@ -1199,26 +1199,37 @@ fn read_events(
         }
 
         if poll(&mut pollfds, timeout)? > 0 {
-            match f.read(&mut data) {
-                Ok(_nbytes) => {
-                    last_timestamp = print_current_time(last_timestamp);
-                    if start_time.is_none() {
-                        start_time = last_timestamp;
-                    }
-                    parse_input_report(&data, rdesc, &start_time.unwrap(), ringbuf.as_ref())?;
-                }
-                Err(e) => {
-                    if e.kind() != std::io::ErrorKind::WouldBlock {
-                        bail!(e);
-                    } else if let Some(ref ringbuf) = ringbuf {
+            let has_events: Vec<bool> = pollfds
+                .iter()
+                .map(|fd| fd.revents())
+                .map(|revents| revents.map_or(false, |flag| flag.intersects(PollFlags::POLLIN)))
+                .collect();
+
+            if has_events[0] {
+                match f.read(&mut data) {
+                    Ok(_nbytes) => {
                         last_timestamp = print_current_time(last_timestamp);
                         if start_time.is_none() {
                             start_time = last_timestamp;
                         }
-                        let _ = ringbuf.consume();
+                        parse_input_report(&data, rdesc, &start_time.unwrap(), ringbuf.as_ref())?;
                     }
+                    Err(e) => {
+                        if e.kind() != std::io::ErrorKind::WouldBlock {
+                            bail!(e);
+                        }
+                    }
+                };
+            }
+            if *has_events.get(1).unwrap_or(&false) {
+                if let Some(ref ringbuf) = ringbuf {
+                    last_timestamp = print_current_time(last_timestamp);
+                    if start_time.is_none() {
+                        start_time = last_timestamp;
+                    }
+                    let _ = ringbuf.consume();
                 }
-            };
+            }
         }
     }
 }
