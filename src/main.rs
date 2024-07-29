@@ -29,10 +29,10 @@ use libbpf_rs::skel::OpenSkel as _;
 use libbpf_rs::skel::SkelBuilder as _;
 
 mod hidrecord {
-    include!("bpf/hidrecord.skel.rs");
+    include!(env!("SKELFILE"));
 }
 mod hidrecord_tracing {
-    include!("bpf/hidrecord_tracing.skel.rs");
+    include!(env!("SKELFILE_TRACING"));
 }
 
 use hidrecord::*;
