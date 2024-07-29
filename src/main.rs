@@ -4,6 +4,7 @@ use anyhow::{bail, Context, Result};
 use clap::{ColorChoice, Parser};
 use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
 use owo_colors::{OwoColorize, Rgb, Stream::Stdout, Style};
+use std::cell::OnceCell;
 use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
@@ -12,7 +13,7 @@ use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::{Once, OnceLock};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 // we reuse ColorChoice for your `--bpf` argument
@@ -1178,7 +1179,7 @@ fn read_events(
         .open(path)?;
 
     let timeout = PollTimeout::try_from(-1).unwrap();
-    let mut start_time: Option<Instant> = None;
+    let start_time: OnceCell<Instant> = OnceCell::new();
     let mut last_timestamp: Option<Instant> = None;
     let mut data = [0; 1024];
     let mut bpf_vec = Vec::new();
@@ -1186,7 +1187,9 @@ fn read_events(
     let ringbuf = map_ringbuf.map(|map_ringbuf| {
         let mut builder = libbpf_rs::RingBufferBuilder::new();
         builder
-            .add(map_ringbuf, |data| event_handler(data, &mut bpf_vec))
+            .add(map_ringbuf, |data| {
+                event_handler(data, &mut bpf_vec, &start_time)
+            })
             .unwrap();
         builder.build().unwrap()
     });
@@ -1211,10 +1214,13 @@ fn read_events(
                 match f.read(&mut data) {
                     Ok(_nbytes) => {
                         last_timestamp = print_current_time(last_timestamp);
-                        if start_time.is_none() {
-                            start_time = last_timestamp;
-                        }
-                        parse_input_report(&data, rdesc, &start_time.unwrap(), ringbuf.as_ref())?;
+                        let _ = start_time.get_or_init(|| last_timestamp.unwrap());
+                        parse_input_report(
+                            &data,
+                            rdesc,
+                            start_time.get().unwrap(),
+                            ringbuf.as_ref(),
+                        )?;
                     }
                     Err(e) => {
                         if e.kind() != std::io::ErrorKind::WouldBlock {
@@ -1226,9 +1232,7 @@ fn read_events(
             if *has_events.get(1).unwrap_or(&false) {
                 if let Some(ref ringbuf) = ringbuf {
                     last_timestamp = print_current_time(last_timestamp);
-                    if start_time.is_none() {
-                        start_time = last_timestamp;
-                    }
+                    let _ = start_time.get_or_init(|| last_timestamp.unwrap());
                     let _ = ringbuf.consume();
                 }
             }
@@ -1266,10 +1270,11 @@ fn find_device() -> Result<PathBuf> {
     Ok(path)
 }
 
-fn event_handler(data: &[u8], buffer: &mut Vec<u8>) -> ::std::os::raw::c_int {
-    static START_TIME_ONCE: Once = Once::new();
-    static mut START_TIME: Option<Instant> = None;
-
+fn event_handler(
+    data: &[u8],
+    buffer: &mut Vec<u8>,
+    start_time: &OnceCell<Instant>,
+) -> ::std::os::raw::c_int {
     if data.len() != std::mem::size_of::<hid_recorder_event>() {
         eprintln!(
             "Invalid size {} != {}",
@@ -1285,14 +1290,7 @@ fn event_handler(data: &[u8], buffer: &mut Vec<u8>) -> ::std::os::raw::c_int {
         return 1;
     }
 
-    let elapsed = unsafe {
-        START_TIME_ONCE.call_once(|| {
-            START_TIME = Some(Instant::now());
-        });
-        START_TIME
-    }
-    .unwrap()
-    .elapsed();
+    let elapsed = start_time.get().unwrap().elapsed();
 
     let size = if event.packet_number == event.packet_count - 1 {
         event.length as usize - event.packet_number as usize * PACKET_SIZE
