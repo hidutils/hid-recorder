@@ -1330,10 +1330,12 @@ fn print_to_log(level: libbpf_rs::PrintLevel, msg: String) {
     /* we strip out the 3 following lines that happen when the kernel
      * doesn't support HID-BPF struct_ops
      */
-    if msg.contains("struct bpf_struct_ops_hid_bpf_ops is not found in kernel BTF")
-        || msg.contains("failed to load object 'hidrecord_bpf'")
-        || msg.contains("failed to load BPF skeleton 'hidrecord_bpf': -2")
-    {
+    let ignore_msgs = [
+        "struct bpf_struct_ops_hid_bpf_ops is not found in kernel BTF",
+        "failed to load object 'hidrecord_bpf'",
+        "failed to load BPF skeleton 'hidrecord_bpf': -2",
+    ];
+    if ignore_msgs.iter().any(|ignore| msg.contains(ignore)) {
         return;
     }
     match level {
