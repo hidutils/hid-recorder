@@ -1144,12 +1144,13 @@ fn parse_input_report(
 
 fn print_current_time(last_timestamp: Option<Instant>) -> Option<Instant> {
     let prev_timestamp = last_timestamp.unwrap_or(Instant::now());
-
-    if last_timestamp.is_none() || prev_timestamp.elapsed().as_secs() > 5 {
+    let elapsed = prev_timestamp.elapsed().as_secs();
+    let now = chrono::prelude::Local::now();
+    if last_timestamp.is_none() || (elapsed > 1 && now.timestamp() % 5 == 0) {
         cprintln!(
             Styles::Timestamp,
             "# Current time: {}",
-            chrono::prelude::Local::now().format("%H:%M:%S").to_string()
+            now.format("%H:%M:%S").to_string()
         );
         Some(Instant::now())
     } else {
@@ -1178,7 +1179,7 @@ fn read_events(
         .custom_flags(libc::O_NONBLOCK)
         .open(path)?;
 
-    let timeout = PollTimeout::try_from(-1).unwrap();
+    let timeout = PollTimeout::try_from(1000).unwrap();
     let start_time: OnceCell<Instant> = OnceCell::new();
     let mut last_timestamp: Option<Instant> = None;
     let mut data = [0; 1024];
@@ -1236,6 +1237,8 @@ fn read_events(
                     let _ = ringbuf.consume();
                 }
             }
+        } else if last_timestamp.is_some() {
+            print_current_time(last_timestamp);
         }
     }
 }
