@@ -1071,6 +1071,11 @@ fn print_field_values(bytes: &[u8], field: &Field) {
     }
 }
 
+fn print_style_prefix(style: &Styles) {
+    cprint!(Styles::None, "# ");
+    cprint!(style, " ");
+}
+
 fn parse_input_report(
     bytes: &[u8],
     rdesc: &ReportDescriptor,
@@ -1081,12 +1086,14 @@ fn parse_input_report(
         bail!("Unable to find matching report");
     };
 
-    if let Some(id) = report.report_id() {
+    let report_style = if let Some(id) = report.report_id() {
         let report_style = Styles::Report { report_id: *id };
-        cprint!(Styles::None, "# ");
-        cprint!(report_style, " ");
+        print_style_prefix(&report_style);
         cprintln!(Styles::None, " Report ID: {id} / ");
-    }
+        report_style
+    } else {
+        Styles::None
+    };
 
     let collections: HashSet<&Collection> = report
         .fields()
@@ -1095,7 +1102,8 @@ fn parse_input_report(
         .filter(|c| matches!(c.collection_type(), CollectionType::Logical))
         .collect();
     if collections.is_empty() {
-        cprint!(Styles::None, "#                ");
+        print_style_prefix(&report_style);
+        cprint!(Styles::None, "              ");
         for field in report.fields() {
             print_field_values(bytes, field);
         }
@@ -1105,7 +1113,8 @@ fn parse_input_report(
         collections.sort_by(|a, b| a.id().partial_cmp(b.id()).unwrap());
 
         for collection in collections {
-            cprint!(Styles::None, "#                ");
+            print_style_prefix(&report_style);
+            cprint!(Styles::None, "              ");
             for field in report.fields().iter().filter(|f| {
                 // logical collections may be nested, so we only group those items together
                 // where the deepest logical collection matches
