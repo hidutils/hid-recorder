@@ -1137,12 +1137,7 @@ fn print_style_prefix(style: &Styles) {
     cprint!(style, " ");
 }
 
-fn parse_input_report(
-    bytes: &[u8],
-    rdesc: &ReportDescriptor,
-    start_time: &Instant,
-    ringbuf: Option<&libbpf_rs::RingBuffer>,
-) -> Result<()> {
+fn print_input_report_description(bytes: &[u8], rdesc: &ReportDescriptor) -> Result<()> {
     let Some(report) = rdesc.find_input_report(bytes) else {
         bail!("Unable to find matching report");
     };
@@ -1192,6 +1187,18 @@ fn parse_input_report(
         }
     }
 
+    Ok(())
+}
+
+fn print_input_report_data(
+    bytes: &[u8],
+    rdesc: &ReportDescriptor,
+    start_time: &Instant,
+    ringbuf: Option<&libbpf_rs::RingBuffer>,
+) -> Result<()> {
+    let Some(report) = rdesc.find_input_report(bytes) else {
+        bail!("Unable to find matching report");
+    };
     if let Some(ringbuf) = ringbuf {
         let _ = ringbuf.consume();
     }
@@ -1286,7 +1293,8 @@ fn read_events(
                     Ok(_nbytes) => {
                         last_timestamp = print_current_time(last_timestamp);
                         let _ = start_time.get_or_init(|| last_timestamp.unwrap());
-                        parse_input_report(
+                        print_input_report_description(&data, rdesc)?;
+                        print_input_report_data(
                             &data,
                             rdesc,
                             start_time.get().unwrap(),
