@@ -110,6 +110,7 @@ trait Backend {
     fn vid(&self) -> u32;
     fn pid(&self) -> u32;
     fn rdesc(&self) -> &[u8];
+    fn read_events(&self, use_bpf: BpfOption, rdesc: &ReportDescriptor) -> Result<()>;
 }
 
 struct HidrawBackend {
@@ -118,6 +119,7 @@ struct HidrawBackend {
     vid: u32,
     pid: u32,
     rdesc: Vec<u8>,
+    device_path: Option<PathBuf>,
 }
 
 impl TryFrom<&Path> for HidrawBackend {
@@ -142,12 +144,19 @@ impl TryFrom<&Path> for HidrawBackend {
                 bail!("Empty report descriptor");
             }
 
+            let device_path = if path.starts_with("/dev") {
+                Some(PathBuf::from(path))
+            } else {
+                None
+            };
+
             Ok(HidrawBackend {
                 name,
                 bustype,
                 vid,
                 pid,
                 rdesc: bytes,
+                device_path,
             })
         } else {
             bail!("Not a syfs file or hidraw node");
@@ -174,6 +183,34 @@ impl Backend for HidrawBackend {
 
     fn rdesc(&self) -> &[u8] {
         &self.rdesc
+    }
+
+    fn read_events(&self, use_bpf: BpfOption, rdesc: &ReportDescriptor) -> Result<()> {
+        if self.device_path.is_none() {
+            return Ok(());
+        }
+        let path = self.device_path.as_ref().unwrap();
+        match preload_bpf_tracer(use_bpf, &path)? {
+            HidBpfSkel::None => read_events(&path, rdesc, None)?,
+            HidBpfSkel::StructOps(skel) => {
+                let maps = skel.maps();
+                // We need to keep _link around or the program gets immediately removed
+                let _link = maps.hid_record().attach_struct_ops()?;
+                read_events(&path, rdesc, Some(maps.events()))?
+            }
+            HidBpfSkel::Tracing(skel, hid_id) => {
+                let attach_args = attach_prog_args {
+                    prog_fd: skel.progs().hid_record_event().as_fd().as_raw_fd(),
+                    hid: hid_id,
+                    retval: -1,
+                };
+
+                let _link =
+                    run_syscall_prog_attach(skel.progs().attach_prog(), attach_args).unwrap();
+                read_events(&path, rdesc, Some(skel.maps().events()))?
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1477,27 +1514,8 @@ fn hid_recorder() -> Result<()> {
     let backend = HidrawBackend::try_from(path.as_path())?;
 
     let rdesc = parse_report_descriptor(&backend, &opts)?;
-    if !cli.only_describe && path.starts_with("/dev") {
-        match preload_bpf_tracer(cli.bpf, &path)? {
-            HidBpfSkel::None => read_events(&path, &rdesc, None)?,
-            HidBpfSkel::StructOps(skel) => {
-                let maps = skel.maps();
-                // We need to keep _link around or the program gets immediately removed
-                let _link = maps.hid_record().attach_struct_ops()?;
-                read_events(&path, &rdesc, Some(maps.events()))?
-            }
-            HidBpfSkel::Tracing(skel, hid_id) => {
-                let attach_args = attach_prog_args {
-                    prog_fd: skel.progs().hid_record_event().as_fd().as_raw_fd(),
-                    hid: hid_id,
-                    retval: -1,
-                };
-
-                let _link =
-                    run_syscall_prog_attach(skel.progs().attach_prog(), attach_args).unwrap();
-                read_events(&path, &rdesc, Some(skel.maps().events()))?
-            }
-        }
+    if !cli.only_describe {
+        backend.read_events(cli.bpf, &rdesc)?;
     }
     Ok(())
 }
