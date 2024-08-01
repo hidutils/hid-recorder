@@ -39,6 +39,8 @@ mod hidrecord_tracing {
 use hidrecord::*;
 use hidrecord_tracing::*;
 
+mod libinput;
+
 static mut OUTFILE: OnceLock<
     std::sync::Mutex<std::cell::RefCell<std::io::LineWriter<std::fs::File>>>,
 > = OnceLock::new();
@@ -1536,6 +1538,8 @@ fn hid_recorder() -> Result<()> {
         bpf: cli.bpf,
     };
     if let Ok(backend) = HidrawBackend::try_from(path.as_path()) {
+        process(backend, &opts)
+    } else if let Ok(backend) = libinput::LibinputRecordingBackend::try_from(path.as_path()) {
         process(backend, &opts)
     } else {
         bail!("Unrecognized file format");
