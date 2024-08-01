@@ -424,8 +424,11 @@ struct Cli {
     path: Option<PathBuf>,
 }
 
+#[derive(Default)]
 struct Options {
     full: bool,
+    only_describe: bool,
+    bpf: ColorChoice,
 }
 
 #[derive(Debug)]
@@ -1499,22 +1502,9 @@ fn run_syscall_prog_attach(
     }
 }
 
-fn hid_recorder() -> Result<()> {
-    let cli = Cli::parse();
-
-    let _ = Outfile::init(&cli);
-
-    let path = match cli.path {
-        Some(path) => path,
-        None => find_device()?,
-    };
-
-    let opts = Options { full: cli.full };
-
-    let backend = HidrawBackend::try_from(path.as_path())?;
-
+fn process(backend: impl Backend, opts: &Options) -> Result<()> {
     let rdesc = parse_report_descriptor(&backend, &opts)?;
-    if !cli.only_describe {
+    if !opts.only_describe {
         cprintln!(
             Styles::Separator,
             "##############################################################################"
@@ -1525,9 +1515,31 @@ fn hid_recorder() -> Result<()> {
             "# E: <seconds>.<microseconds> <length-in-bytes> [bytes ...]",
         );
         cprintln!(Styles::None, "#");
-        backend.read_events(cli.bpf, &rdesc)?;
+        backend.read_events(opts.bpf, &rdesc)?;
     }
     Ok(())
+}
+
+fn hid_recorder() -> Result<()> {
+    let cli = Cli::parse();
+
+    let _ = Outfile::init(&cli);
+
+    let path = match cli.path {
+        Some(path) => path,
+        None => find_device()?,
+    };
+
+    let opts = Options {
+        full: cli.full,
+        only_describe: cli.only_describe,
+        bpf: cli.bpf,
+    };
+    if let Ok(backend) = HidrawBackend::try_from(path.as_path()) {
+        process(backend, &opts)
+    } else {
+        bail!("Unrecognized file format");
+    }
 }
 
 fn main() -> ExitCode {
@@ -1600,7 +1612,10 @@ mod tests {
                 )
             })
         {
-            let opts = Options { full: true };
+            let opts = Options {
+                full: true,
+                ..Default::default()
+            };
             parse_report_descriptor(&backend, &opts)
                 .unwrap_or_else(|_| panic!("Failed to parse {:?}", path));
         }
