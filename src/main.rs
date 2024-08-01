@@ -1266,7 +1266,7 @@ fn read_events(
         let mut builder = libbpf_rs::RingBufferBuilder::new();
         builder
             .add(map_ringbuf, |data| {
-                event_handler(data, &mut bpf_vec, &start_time)
+                bpf_event_handler(data, &mut bpf_vec, &start_time)
             })
             .unwrap();
         builder.build().unwrap()
@@ -1351,7 +1351,7 @@ fn find_device() -> Result<PathBuf> {
     Ok(path)
 }
 
-fn event_handler(
+fn bpf_event_handler(
     data: &[u8],
     buffer: &mut Vec<u8>,
     start_time: &OnceCell<Instant>,
