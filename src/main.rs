@@ -1248,17 +1248,6 @@ fn read_events(
     rdesc: &ReportDescriptor,
     map_ringbuf: Option<&libbpf_rs::Map>,
 ) -> Result<()> {
-    cprintln!(
-        Styles::Separator,
-        "##############################################################################"
-    );
-    cprintln!(Styles::None, "# Recorded events below in format:");
-    cprintln!(
-        Styles::None,
-        "# E: <seconds>.<microseconds> <length-in-bytes> [bytes ...]",
-    );
-    cprintln!(Styles::None, "#");
-
     let mut f = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK)
@@ -1523,6 +1512,16 @@ fn hid_recorder() -> Result<()> {
 
     let rdesc = parse_report_descriptor(&backend, &opts)?;
     if !cli.only_describe {
+        cprintln!(
+            Styles::Separator,
+            "##############################################################################"
+        );
+        cprintln!(Styles::None, "# Recorded events below in format:");
+        cprintln!(
+            Styles::None,
+            "# E: <seconds>.<microseconds> <length-in-bytes> [bytes ...]",
+        );
+        cprintln!(Styles::None, "#");
         backend.read_events(cli.bpf, &rdesc)?;
     }
     Ok(())
