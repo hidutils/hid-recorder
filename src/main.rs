@@ -14,7 +14,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::OnceLock;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 // we reuse ColorChoice for your `--bpf` argument
 use clap::ColorChoice as BpfOption;
@@ -1193,17 +1193,11 @@ fn print_input_report_description(bytes: &[u8], rdesc: &ReportDescriptor) -> Res
 fn print_input_report_data(
     bytes: &[u8],
     rdesc: &ReportDescriptor,
-    start_time: &Instant,
-    ringbuf: Option<&libbpf_rs::RingBuffer>,
+    elapsed: &Duration,
 ) -> Result<()> {
     let Some(report) = rdesc.find_input_report(bytes) else {
         bail!("Unable to find matching report");
     };
-    if let Some(ringbuf) = ringbuf {
-        let _ = ringbuf.consume();
-    }
-
-    let elapsed = start_time.elapsed();
 
     cprintln!(
         Styles::Data,
@@ -1294,12 +1288,14 @@ fn read_events(
                         last_timestamp = print_current_time(last_timestamp);
                         let _ = start_time.get_or_init(|| last_timestamp.unwrap());
                         print_input_report_description(&data, rdesc)?;
-                        print_input_report_data(
-                            &data,
-                            rdesc,
-                            start_time.get().unwrap(),
-                            ringbuf.as_ref(),
-                        )?;
+
+                        let elapsed = start_time.get().unwrap().elapsed();
+                        // This prints the B: 123 00 01 02 ... data line via the callback
+                        if let Some(ref ringbuf) = ringbuf {
+                            let _ = ringbuf.consume();
+                        }
+
+                        print_input_report_data(&data, rdesc, &elapsed)?;
                     }
                     Err(e) => {
                         if e.kind() != std::io::ErrorKind::WouldBlock {
