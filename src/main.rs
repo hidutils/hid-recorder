@@ -122,6 +122,86 @@ struct HidrawBackend {
     device_path: Option<PathBuf>,
 }
 
+impl HidrawBackend {
+    fn read_events_loop(
+        &self,
+        path: &Path,
+        rdesc: &ReportDescriptor,
+        map_ringbuf: Option<&libbpf_rs::Map>,
+    ) -> Result<()> {
+        let mut f = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(path)?;
+
+        let timeout = PollTimeout::try_from(1000).unwrap();
+        let start_time: OnceCell<Instant> = OnceCell::new();
+        let mut last_timestamp: Option<Instant> = None;
+        let mut data = [0; 1024];
+        let mut bpf_vec = Vec::new();
+
+        let ringbuf = map_ringbuf.map(|map_ringbuf| {
+            let mut builder = libbpf_rs::RingBufferBuilder::new();
+            builder
+                .add(map_ringbuf, |data| {
+                    bpf_event_handler(data, &mut bpf_vec, &start_time)
+                })
+                .unwrap();
+            builder.build().unwrap()
+        });
+
+        loop {
+            let mut pollfds = vec![PollFd::new(f.as_fd(), PollFlags::POLLIN)];
+            if let Some(ref ringbuf) = ringbuf {
+                let ringbuf_fd = unsafe {
+                    std::os::fd::BorrowedFd::borrow_raw(ringbuf.epoll_fd() as std::os::fd::RawFd)
+                };
+                pollfds.push(PollFd::new(ringbuf_fd, PollFlags::POLLIN));
+            }
+
+            if poll(&mut pollfds, timeout)? > 0 {
+                let has_events: Vec<bool> = pollfds
+                    .iter()
+                    .map(|fd| fd.revents())
+                    .map(|revents| revents.map_or(false, |flag| flag.intersects(PollFlags::POLLIN)))
+                    .collect();
+
+                if has_events[0] {
+                    match f.read(&mut data) {
+                        Ok(_nbytes) => {
+                            last_timestamp = print_current_time(last_timestamp);
+                            let _ = start_time.get_or_init(|| last_timestamp.unwrap());
+                            print_input_report_description(&data, rdesc)?;
+
+                            let elapsed = start_time.get().unwrap().elapsed();
+                            // This prints the B: 123 00 01 02 ... data line via the callback
+                            if let Some(ref ringbuf) = ringbuf {
+                                let _ = ringbuf.consume();
+                            }
+
+                            print_input_report_data(&data, rdesc, &elapsed)?;
+                        }
+                        Err(e) => {
+                            if e.kind() != std::io::ErrorKind::WouldBlock {
+                                bail!(e);
+                            }
+                        }
+                    };
+                }
+                if *has_events.get(1).unwrap_or(&false) {
+                    if let Some(ref ringbuf) = ringbuf {
+                        last_timestamp = print_current_time(last_timestamp);
+                        let _ = start_time.get_or_init(|| last_timestamp.unwrap());
+                        let _ = ringbuf.consume();
+                    }
+                }
+            } else if last_timestamp.is_some() {
+                print_current_time(last_timestamp);
+            }
+        }
+    }
+}
+
 impl TryFrom<&Path> for HidrawBackend {
     type Error = anyhow::Error;
 
@@ -191,12 +271,12 @@ impl Backend for HidrawBackend {
         }
         let path = self.device_path.as_ref().unwrap();
         match preload_bpf_tracer(use_bpf, &path)? {
-            HidBpfSkel::None => read_events(&path, rdesc, None)?,
+            HidBpfSkel::None => self.read_events_loop(&path, rdesc, None)?,
             HidBpfSkel::StructOps(skel) => {
                 let maps = skel.maps();
                 // We need to keep _link around or the program gets immediately removed
                 let _link = maps.hid_record().attach_struct_ops()?;
-                read_events(&path, rdesc, Some(maps.events()))?
+                self.read_events_loop(&path, rdesc, Some(maps.events()))?
             }
             HidBpfSkel::Tracing(skel, hid_id) => {
                 let attach_args = attach_prog_args {
@@ -207,7 +287,7 @@ impl Backend for HidrawBackend {
 
                 let _link =
                     run_syscall_prog_attach(skel.progs().attach_prog(), attach_args).unwrap();
-                read_events(&path, rdesc, Some(skel.maps().events()))?
+                self.read_events_loop(&path, rdesc, Some(skel.maps().events()))?
             }
         }
         Ok(())
@@ -1240,83 +1320,6 @@ fn print_current_time(last_timestamp: Option<Instant>) -> Option<Instant> {
         Some(Instant::now())
     } else {
         last_timestamp
-    }
-}
-
-fn read_events(
-    path: &Path,
-    rdesc: &ReportDescriptor,
-    map_ringbuf: Option<&libbpf_rs::Map>,
-) -> Result<()> {
-    let mut f = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(path)?;
-
-    let timeout = PollTimeout::try_from(1000).unwrap();
-    let start_time: OnceCell<Instant> = OnceCell::new();
-    let mut last_timestamp: Option<Instant> = None;
-    let mut data = [0; 1024];
-    let mut bpf_vec = Vec::new();
-
-    let ringbuf = map_ringbuf.map(|map_ringbuf| {
-        let mut builder = libbpf_rs::RingBufferBuilder::new();
-        builder
-            .add(map_ringbuf, |data| {
-                bpf_event_handler(data, &mut bpf_vec, &start_time)
-            })
-            .unwrap();
-        builder.build().unwrap()
-    });
-
-    loop {
-        let mut pollfds = vec![PollFd::new(f.as_fd(), PollFlags::POLLIN)];
-        if let Some(ref ringbuf) = ringbuf {
-            let ringbuf_fd = unsafe {
-                std::os::fd::BorrowedFd::borrow_raw(ringbuf.epoll_fd() as std::os::fd::RawFd)
-            };
-            pollfds.push(PollFd::new(ringbuf_fd, PollFlags::POLLIN));
-        }
-
-        if poll(&mut pollfds, timeout)? > 0 {
-            let has_events: Vec<bool> = pollfds
-                .iter()
-                .map(|fd| fd.revents())
-                .map(|revents| revents.map_or(false, |flag| flag.intersects(PollFlags::POLLIN)))
-                .collect();
-
-            if has_events[0] {
-                match f.read(&mut data) {
-                    Ok(_nbytes) => {
-                        last_timestamp = print_current_time(last_timestamp);
-                        let _ = start_time.get_or_init(|| last_timestamp.unwrap());
-                        print_input_report_description(&data, rdesc)?;
-
-                        let elapsed = start_time.get().unwrap().elapsed();
-                        // This prints the B: 123 00 01 02 ... data line via the callback
-                        if let Some(ref ringbuf) = ringbuf {
-                            let _ = ringbuf.consume();
-                        }
-
-                        print_input_report_data(&data, rdesc, &elapsed)?;
-                    }
-                    Err(e) => {
-                        if e.kind() != std::io::ErrorKind::WouldBlock {
-                            bail!(e);
-                        }
-                    }
-                };
-            }
-            if *has_events.get(1).unwrap_or(&false) {
-                if let Some(ref ringbuf) = ringbuf {
-                    last_timestamp = print_current_time(last_timestamp);
-                    let _ = start_time.get_or_init(|| last_timestamp.unwrap());
-                    let _ = ringbuf.consume();
-                }
-            }
-        } else if last_timestamp.is_some() {
-            print_current_time(last_timestamp);
-        }
     }
 }
 
