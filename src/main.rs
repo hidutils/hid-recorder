@@ -39,6 +39,7 @@ mod hidrecord_tracing {
 use hidrecord::*;
 use hidrecord_tracing::*;
 
+mod hidrecording;
 mod libinput;
 
 static mut OUTFILE: OnceLock<
@@ -1222,7 +1223,7 @@ fn print_style_prefix(style: &Styles) {
     cprint!(style, " ");
 }
 
-fn print_input_report_description(bytes: &[u8], rdesc: &ReportDescriptor) -> Result<()> {
+pub fn print_input_report_description(bytes: &[u8], rdesc: &ReportDescriptor) -> Result<()> {
     let Some(report) = rdesc.find_input_report(bytes) else {
         bail!("Unable to find matching report");
     };
@@ -1540,6 +1541,8 @@ fn hid_recorder() -> Result<()> {
     if let Ok(backend) = HidrawBackend::try_from(path.as_path()) {
         process(backend, &opts)
     } else if let Ok(backend) = libinput::LibinputRecordingBackend::try_from(path.as_path()) {
+        process(backend, &opts)
+    } else if let Ok(backend) = hidrecording::HidRecorderBackend::try_from(path.as_path()) {
         process(backend, &opts)
     } else {
         bail!("Unrecognized file format");
