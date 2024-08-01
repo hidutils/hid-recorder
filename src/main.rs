@@ -1213,6 +1213,20 @@ fn print_input_report_data(
     Ok(())
 }
 
+fn print_bpf_input_report_data(bytes: &[u8], elapsed: &Duration) {
+    let bytes = bytes
+        .iter()
+        .fold("".to_string(), |acc, b| format!("{acc}{b:02x} "));
+    cprintln!(
+        Styles::Bpf,
+        "B: {:06}.{:06} {} {}",
+        elapsed.as_secs(),
+        elapsed.as_micros() % 1000000,
+        bytes.len(),
+        bytes,
+    );
+}
+
 fn print_current_time(last_timestamp: Option<Instant>) -> Option<Instant> {
     let prev_timestamp = last_timestamp.unwrap_or(Instant::now());
     let elapsed = prev_timestamp.elapsed().as_secs();
@@ -1382,17 +1396,7 @@ fn bpf_event_handler(
     buffer.extend_from_slice(&event.data[..size]);
 
     if event.packet_number == event.packet_count - 1 {
-        let bytes = buffer
-            .iter()
-            .fold("".to_string(), |acc, b| format!("{acc}{b:02x} "));
-        cprintln!(
-            Styles::Bpf,
-            "B: {:06}.{:06} {} {}",
-            elapsed.as_secs(),
-            elapsed.as_micros() % 1000000,
-            buffer.len(),
-            bytes,
-        );
+        print_bpf_input_report_data(&buffer, &elapsed);
     }
     0
 }
