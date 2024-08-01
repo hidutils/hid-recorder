@@ -104,6 +104,79 @@ impl Write for Outfile {
     }
 }
 
+trait Backend {
+    fn name(&self) -> &str;
+    fn bustype(&self) -> u32;
+    fn vid(&self) -> u32;
+    fn pid(&self) -> u32;
+    fn rdesc(&self) -> &[u8];
+}
+
+struct HidrawBackend {
+    name: String,
+    bustype: u32,
+    vid: u32,
+    pid: u32,
+    rdesc: Vec<u8>,
+}
+
+impl TryFrom<&Path> for HidrawBackend {
+    type Error = anyhow::Error;
+
+    fn try_from(path: &Path) -> Result<Self> {
+        if ["/dev", "/sys"]
+            .iter()
+            .any(|prefix| path.starts_with(prefix))
+        {
+            let sysfs = find_sysfs_path(path)?;
+            let rdesc_path = sysfs.join("report_descriptor");
+            if !rdesc_path.exists() {
+                bail!("Unable to find report descriptor at {rdesc_path:?}");
+            }
+
+            let (name, ids) = parse_uevent(&sysfs)?;
+            let (bustype, vid, pid) = ids;
+
+            let bytes = std::fs::read(&rdesc_path)?;
+            if bytes.is_empty() {
+                bail!("Empty report descriptor");
+            }
+
+            Ok(HidrawBackend {
+                name,
+                bustype,
+                vid,
+                pid,
+                rdesc: bytes,
+            })
+        } else {
+            bail!("Not a syfs file or hidraw node");
+        }
+    }
+}
+
+impl Backend for HidrawBackend {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn bustype(&self) -> u32 {
+        self.bustype
+    }
+
+    fn vid(&self) -> u32 {
+        self.vid
+    }
+
+    fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    fn rdesc(&self) -> &[u8] {
+        &self.rdesc
+    }
+}
+
 const PACKET_SIZE: usize = 64;
 
 // A Rust version of hid_recorder_event in hidrecord.bpf.c
@@ -236,14 +309,6 @@ struct Cli {
 
 struct Options {
     full: bool,
-}
-
-struct RDescFile {
-    path: PathBuf,
-    name: Option<String>,
-    bustype: u32,
-    vid: u32,
-    pid: u32,
 }
 
 #[derive(Debug)]
@@ -891,51 +956,10 @@ fn parse_uevent(sysfs: &Path) -> Result<(String, (u32, u32, u32))> {
     Ok((name.to_string(), (bustype, vid, pid)))
 }
 
-fn find_rdesc(path: &Path) -> Result<RDescFile> {
-    if ["/dev", "/sys"]
-        .iter()
-        .any(|prefix| path.starts_with(prefix))
-    {
-        let sysfs = find_sysfs_path(path)?;
-        let rdesc_path = sysfs.join("report_descriptor");
-        if !rdesc_path.exists() {
-            bail!("Unable to find report descriptor at {rdesc_path:?}");
-        }
-
-        let (name, ids) = parse_uevent(&sysfs)?;
-        let (bustype, vid, pid) = ids;
-
-        Ok(RDescFile {
-            path: rdesc_path,
-            name: Some(name),
-            bustype,
-            vid,
-            pid,
-        })
-    } else {
-        // If it's a file, let's assume it's a binary rdesc file like
-        // the report_descriptor file.
-        Ok(RDescFile {
-            path: path.into(),
-            name: None,
-            bustype: 0,
-            vid: 0,
-            pid: 0,
-        })
-    }
-}
-
-fn parse(rdesc: &RDescFile, opts: &Options) -> Result<ReportDescriptor> {
-    let bytes = std::fs::read(&rdesc.path)?;
-    if bytes.is_empty() {
-        bail!("Empty report descriptor");
-    }
-    let name = if let Some(name) = &rdesc.name {
-        name.clone()
-    } else {
-        String::from("unknown")
-    };
-    let (bustype, vid, pid) = (rdesc.bustype, rdesc.vid, rdesc.pid);
+fn parse_report_descriptor(backend: &impl Backend, opts: &Options) -> Result<ReportDescriptor> {
+    let name = backend.name();
+    let (bustype, vid, pid) = (backend.bustype(), backend.vid(), backend.pid());
+    let bytes = backend.rdesc();
 
     cprintln!(Styles::None, "# {name}");
     cprintln!(
@@ -1448,10 +1472,11 @@ fn hid_recorder() -> Result<()> {
         None => find_device()?,
     };
 
-    let rdesc_file = find_rdesc(&path)?;
     let opts = Options { full: cli.full };
 
-    let rdesc = parse(&rdesc_file, &opts)?;
+    let backend = HidrawBackend::try_from(path.as_path())?;
+
+    let rdesc = parse_report_descriptor(&backend, &opts)?;
     if !cli.only_describe && path.starts_with("/dev") {
         match preload_bpf_tracer(cli.bpf, &path)? {
             HidBpfSkel::None => read_events(&path, &rdesc, None)?,
@@ -1501,7 +1526,7 @@ mod tests {
             .filter(|name| name.starts_with("hidraw"))
             .collect();
         for hidraw in hidraws.iter().map(|h| PathBuf::from("/dev/").join(h)) {
-            let result = find_rdesc(&hidraw);
+            let result = HidrawBackend::try_from(hidraw.as_path());
             assert!(result.is_ok());
         }
     }
@@ -1523,7 +1548,7 @@ mod tests {
             assert!(evdevs
                 .iter()
                 .map(|n| PathBuf::from("/dev/input").join(n))
-                .any(|evdev| find_rdesc(&evdev).is_ok()));
+                .any(|evdev| HidrawBackend::try_from(evdev.as_path()).is_ok()));
         }
     }
 
@@ -1537,14 +1562,19 @@ mod tests {
             .flat_map(|f| f.file_name().into_string())
             .filter(|name| name.starts_with("hidraw"))
             .collect();
-        for rdesc_file in hidraws
+        for (path, backend) in hidraws
             .iter()
             .map(|h| PathBuf::from("/dev/").join(h))
-            .map(|path| find_rdesc(&path).unwrap())
+            .map(|path| {
+                (
+                    path.clone(),
+                    HidrawBackend::try_from(path.as_path()).unwrap(),
+                )
+            })
         {
             let opts = Options { full: true };
-            parse(&rdesc_file, &opts)
-                .unwrap_or_else(|_| panic!("Failed to parse {:?}", rdesc_file.path));
+            parse_report_descriptor(&backend, &opts)
+                .unwrap_or_else(|_| panic!("Failed to parse {:?}", path));
         }
     }
 }
