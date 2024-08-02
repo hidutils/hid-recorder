@@ -2,10 +2,9 @@
 
 use anyhow::{bail, Result};
 use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
-use owo_colors::{OwoColorize, Stream::Stdout};
 use std::cell::OnceCell;
 use std::fs::OpenOptions;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -107,7 +106,7 @@ impl HidrawBackend {
             .custom_flags(libc::O_NONBLOCK)
             .open(path)?;
 
-        let timeout = PollTimeout::try_from(1000).unwrap();
+        let timeout = PollTimeout::try_from(-1).unwrap();
         let start_time: OnceCell<Instant> = OnceCell::new();
         let mut last_timestamp: Option<Instant> = None;
         let mut data = [0; 1024];
@@ -168,8 +167,6 @@ impl HidrawBackend {
                         let _ = ringbuf.consume();
                     }
                 }
-            } else if last_timestamp.is_some() {
-                print_current_time(last_timestamp);
             }
         }
     }
@@ -326,8 +323,12 @@ fn print_to_log(level: libbpf_rs::PrintLevel, msg: String) {
         return;
     }
     match level {
-        libbpf_rs::PrintLevel::Info => cprintln!(Styles::Bpf, "{}", msg.trim()),
-        libbpf_rs::PrintLevel::Warn => cprintln!(Styles::Note, "{}", msg.trim()),
+        libbpf_rs::PrintLevel::Info => {
+            Outfile::new().writeln(&Styles::Bpf, format!("{}", msg.trim()).as_str())
+        }
+        libbpf_rs::PrintLevel::Warn => {
+            Outfile::new().writeln(&Styles::Note, format!("{}", msg.trim()).as_str())
+        }
         _ => (),
     }
 }

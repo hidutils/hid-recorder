@@ -24,6 +24,27 @@ static mut OUTFILE: OnceLock<
     std::sync::Mutex<std::cell::RefCell<std::io::LineWriter<std::fs::File>>>,
 > = OnceLock::new();
 
+pub enum Prefix {
+    Name,
+    Id,
+    ReportDescriptor,
+    Event,
+    Bpf,
+}
+
+impl std::fmt::Display for Prefix {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Prefix::Name => "N",
+            Prefix::Id => "I",
+            Prefix::ReportDescriptor => "R",
+            Prefix::Event => "E",
+            Prefix::Bpf => "B",
+        };
+        write!(f, "{s}:")
+    }
+}
+
 pub enum Outfile {
     Stdout,
     File(&'static mut std::sync::Mutex<std::cell::RefCell<std::io::LineWriter<std::fs::File>>>),
@@ -55,6 +76,143 @@ impl Outfile {
             };
         }
         Ok(())
+    }
+
+    fn write(&mut self, style: &Styles, msg: &str) {
+        write!(
+            self,
+            "{}",
+            msg.if_supports_color(Stdout, |text| text.style(style.style()))
+        )
+        .unwrap();
+    }
+
+    fn writeln(&mut self, style: &Styles, msg: &str) {
+        writeln!(
+            self,
+            "{}",
+            msg.if_supports_color(Stdout, |text| text.style(style.style()))
+        )
+        .unwrap();
+    }
+
+    /// Write a generic unstyled comment
+    pub fn write_comment(&mut self, msg: &str) {
+        self.writeln(&Styles::None, format!("# {msg}").as_ref());
+    }
+
+    /// Write a generic comment with styling
+    pub fn write_comment_styled(&mut self, style: Styles, msg: &str) {
+        self.writeln(&style, format!("# {msg}").as_ref());
+    }
+
+    /// Write the item information as a comment (typically at the top of the file)
+    pub fn write_item_comment(
+        &mut self,
+        item_type: ItemType,
+        item: &str,
+        bytes: &[u8],
+        indent: usize,
+        offset: usize,
+    ) {
+        let bytes = bytes
+            .iter()
+            .map(|b| format!("0x{b:02x}, "))
+            .collect::<Vec<String>>()
+            .join("");
+
+        let style = match item_type {
+            ItemType::Main(MainItem::Input(..)) => Styles::InputItem,
+            ItemType::Main(MainItem::Output(..)) => Styles::OutputItem,
+            ItemType::Main(MainItem::Feature(..)) => Styles::FeatureItem,
+            ItemType::Global(GlobalItem::ReportId { .. }) => Styles::ReportId,
+            _ => Styles::None,
+        };
+
+        let indented = format!("{:indent$}{}", "", item);
+        self.writeln(
+            &style,
+            format!("# {bytes:30} // {indented:41} {offset}").as_ref(),
+        );
+    }
+
+    /// Print a separator line for logical separation between sections
+    pub fn separator(&mut self) {
+        self.writeln(
+            &Styles::Separator,
+            "##############################################################################",
+        );
+    }
+
+    /// Write the (colored) prefix for the given report, if any
+    pub fn report_comment_prefix(&mut self, report_id: &Option<ReportId>) {
+        let report_style = if let Some(report_id) = report_id {
+            Styles::Report {
+                report_id: *report_id,
+            }
+        } else {
+            Styles::None
+        };
+        self.write(&Styles::None, "# ");
+        self.write(&report_style, " ");
+        self.write(&Styles::None, " ");
+    }
+
+    /// Print a comment related to some report, prefixed with a colored
+    /// version of the report id
+    pub fn report_comment(&mut self, report_id: &Option<ReportId>, msg: &str) {
+        self.report_comment_prefix(report_id);
+        self.writeln(&Styles::None, msg);
+    }
+
+    /// Print a comment related to some report, the comment message contains
+    /// of several individually styled components
+    pub fn report_comment_components(
+        &mut self,
+        report_id: &Option<ReportId>,
+        components: &[(Styles, String)],
+    ) {
+        self.report_comment_prefix(report_id);
+        for (style, msg) in components {
+            Outfile::new().write(style, format!("{}", msg).as_ref());
+        }
+        self.writeln(&Styles::None, "");
+    }
+
+    /// Write an actual data entry (unlike a comment)
+    pub fn write_data(&mut self, prefix: Prefix, datastr: &str) {
+        self.writeln(&Styles::Data, format!("{prefix} {datastr}").as_str());
+    }
+
+    pub fn write_name(&mut self, name: &str) {
+        self.write_data(Prefix::Name, format!("{name}").as_str());
+    }
+    pub fn write_id(&mut self, bustype: u32, vid: u32, pid: u32) {
+        self.write_data(Prefix::Id, format!("{bustype:x} {vid:x} {pid:x}").as_str());
+    }
+
+    pub fn write_report_descriptor(&mut self, bytes: &[u8]) {
+        let bytestr = bytes
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<String>>()
+            .join(" ");
+        self.write_data(
+            Prefix::ReportDescriptor,
+            format!("{} {bytestr}", bytes.len()).as_str(),
+        );
+    }
+
+    /// Write a timestamp comment
+    pub fn write_timestamp(&mut self) {
+        self.writeln(
+            &Styles::Timestamp,
+            format!(
+                "# Current time: {}",
+                chrono::prelude::Local::now().format("%H:%M:%S").to_string()
+            )
+            .as_ref(),
+        )
     }
 }
 
@@ -94,8 +252,8 @@ trait Backend {
     fn read_events(&self, use_bpf: BpfOption, rdesc: &ReportDescriptor) -> Result<()>;
 }
 
-#[derive(Default)]
-enum Styles {
+#[derive(Default, Clone)]
+pub enum Styles {
     #[default]
     None,
     InputItem,
@@ -139,28 +297,6 @@ impl Styles {
 }
 
 const MAX_USAGES_DISPLAYED: usize = 5;
-
-// Usage: cprintln!(Styles::Data, <normal println args>)
-//    or: cprintln!()
-macro_rules! cprintln {
-    () => { writeln!(Outfile::new()).unwrap() };
-    ($style:expr, $($arg:tt)*) => {{
-        writeln!(Outfile::new(),
-                 "{}",
-                 format!($($arg)*).if_supports_color(Stdout, |text| text.style($style.style())))
-        .unwrap();
-    }};
-}
-
-// Usage: cprint!(Styles::Data, <normal println args>)
-macro_rules! cprint {
-    ($style:expr, $($arg:tt)*) => {{
-        write!(Outfile::new(),
-               "{}",
-               format!($($arg)*).if_supports_color(Stdout, |text| text.style($style.style())))
-        .unwrap();
-    }};
-}
 
 mod hidraw;
 mod hidrecording;
@@ -384,26 +520,16 @@ fn print_rdesc_items(bytes: &[u8]) -> Result<()> {
     for rdesc_item in rdesc_items.iter() {
         let item = rdesc_item.item();
         let offset = rdesc_item.offset();
-        let bytes = item
-            .bytes()
-            .iter()
-            .map(|b| format!("0x{b:02x}, "))
-            .collect::<Vec<String>>()
-            .join("");
-
         if let ItemType::Main(MainItem::EndCollection) = item.item_type() {
             indent -= 2;
         }
-
-        let indented = format!("{:indent$}{}", "", fmt_item(item, &current_usage_page));
-        let style = match item.item_type() {
-            ItemType::Main(MainItem::Input(..)) => Styles::InputItem,
-            ItemType::Main(MainItem::Output(..)) => Styles::OutputItem,
-            ItemType::Main(MainItem::Feature(..)) => Styles::FeatureItem,
-            ItemType::Global(GlobalItem::ReportId { .. }) => Styles::ReportId,
-            _ => Styles::None,
-        };
-        cprintln!(style, "# {bytes:30} // {indented:41} {offset}");
+        Outfile::new().write_item_comment(
+            item.item_type(),
+            fmt_item(item, &current_usage_page).as_ref(),
+            item.bytes(),
+            indent,
+            offset,
+        );
 
         match item.item_type() {
             ItemType::Main(MainItem::Collection(_)) => indent += 2,
@@ -555,7 +681,7 @@ fn bits_to_str(bits: &std::ops::Range<usize>) -> String {
 #[derive(Default)]
 struct PrintableColumn {
     string: String,
-    style: Styles,
+    style: Styles, // FIXME
 }
 
 impl From<&str> for PrintableColumn {
@@ -671,20 +797,13 @@ fn repeat_usage_filler(count: usize) -> PrintableRow {
 
 /// Print the parsed reports as an outline of how they look like
 fn print_report_summary(r: &impl Report, opts: &Options) {
-    let report_style;
-
-    if r.report_id().is_some() {
-        let report_id = r.report_id().unwrap();
-        report_style = Styles::Report { report_id };
-        cprint!(Styles::None, "# ");
-        cprint!(report_style, " ");
-        cprintln!(Styles::None, " Report ID: {}", report_id);
-    } else {
-        report_style = Styles::None;
+    if let Some(report_id) = r.report_id() {
+        Outfile::new().report_comment(r.report_id(), format!("Report ID: {}", report_id).as_str());
     }
-    cprint!(Styles::None, "# ");
-    cprint!(report_style, " ");
-    cprintln!(Styles::None, " | Report size: {} bits", r.size_in_bits());
+    Outfile::new().report_comment(
+        r.report_id(),
+        format!(" | Report size: {} bits", r.size_in_bits()).as_str(),
+    );
 
     const REPEAT_LIMIT: usize = 3;
 
@@ -785,13 +904,17 @@ fn print_report_summary(r: &impl Report, opts: &Options) {
         table.add(repeat_usage_filler(repeat_usage_count));
     }
     for row in table.rows {
-        cprint!(Styles::None, "# ");
-        cprint!(report_style, " ");
-        cprint!(Styles::None, " ");
-        for (idx, col) in row.columns().enumerate() {
-            cprint!(col.style, "| {:w$} ", col.string, w = table.colwidths[idx]);
-        }
-        cprintln!();
+        let components = row
+            .columns()
+            .enumerate()
+            .map(|(idx, col)| {
+                (
+                    col.style.clone(),
+                    format!("{:w$} ", col.string, w = table.colwidths[idx]),
+                )
+            })
+            .collect::<Vec<(Styles, String)>>();
+        Outfile::new().report_comment_components(r.report_id(), components.as_slice());
     }
 }
 
@@ -830,44 +953,38 @@ fn parse_report_descriptor(backend: &impl Backend, opts: &Options) -> Result<Rep
     let (bustype, vid, pid) = (backend.bustype(), backend.vid(), backend.pid());
     let bytes = backend.rdesc();
 
-    cprintln!(Styles::None, "# {name}");
-    cprintln!(
-        Styles::None,
-        "# Report descriptor length: {} bytes",
-        bytes.len()
-    );
+    Outfile::new().write_comment(format!("{name}").as_str());
+    Outfile::new()
+        .write_comment(format!("Report descriptor length: {} bytes", bytes.len()).as_str());
     print_rdesc_items(&bytes)?;
 
     // Print the readable fields
-    let bytestr = bytes
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<Vec<String>>()
-        .join(" ");
-    cprintln!(Styles::Data, "R: {} {bytestr}", bytes.len());
-    cprintln!(Styles::Data, "N: {name}");
-    cprintln!(Styles::Data, "I: {bustype:x} {vid:x} {pid:x}");
+    Outfile::new().write_report_descriptor(bytes);
+    Outfile::new().write_name(name);
+    Outfile::new().write_id(bustype, vid, pid);
 
     let rdesc = ReportDescriptor::try_from(&bytes as &[u8])?;
-    cprintln!(Styles::None, "# Report descriptor:");
+    Outfile::new().write_comment("Report descriptor:");
     let input_reports = rdesc.input_reports();
     if !input_reports.is_empty() {
         for r in rdesc.input_reports() {
-            cprintln!(Styles::InputItem, "# ------- Input Report ------- ");
+            Outfile::new().write_comment_styled(Styles::InputItem, "------- Input Report ------- ");
             print_report_summary(r, opts);
         }
     }
     let output_reports = rdesc.output_reports();
     if !output_reports.is_empty() {
         for r in rdesc.output_reports() {
-            cprintln!(Styles::OutputItem, "# ------- Output Report ------- ");
+            Outfile::new()
+                .write_comment_styled(Styles::OutputItem, "------- Output Report ------- ");
             print_report_summary(r, opts);
         }
     }
     let feature_reports = rdesc.feature_reports();
     if !feature_reports.is_empty() {
         for r in rdesc.feature_reports() {
-            cprintln!(Styles::FeatureItem, "# ------- Feature Report ------- ");
+            Outfile::new()
+                .write_comment_styled(Styles::FeatureItem, "------- Feature Report ------- ");
             print_report_summary(r, opts);
         }
     }
@@ -889,38 +1006,33 @@ fn get_hut_str(usage: &Usage) -> String {
     }
 }
 
-fn print_field_values(bytes: &[u8], field: &Field) {
+fn print_field_values(bytes: &[u8], field: &Field) -> String {
     match field {
         Field::Constant(_) => {
-            cprint!(
-                Styles::None,
-                "<{} bits padding> | ",
-                field.bits().clone().count()
-            );
+            format!("<{} bits padding>", field.bits().clone().count())
         }
         Field::Variable(var) => {
             let hutstr = get_hut_str(&var.usage);
             if var.bits.len() <= 32 {
                 if var.is_signed() {
                     let v = var.extract_i32(bytes).unwrap();
-                    cprint!(Styles::None, "{}: {:5} | ", hutstr, v);
+                    format!("{}: {:5}", hutstr, v)
                 } else {
                     let v = var.extract_u32(bytes).unwrap();
-                    cprint!(Styles::None, "{}: {:5} | ", hutstr, v);
+                    format!("{}: {:5}", hutstr, v)
                 }
             } else {
                 // FIXME: output is not correct if start/end doesn't align with byte
                 // boundaries
                 let data = &bytes[var.bits.start / 8..var.bits.end / 8];
-                cprint!(
-                    Styles::None,
-                    "{}: {} | ",
+                format!(
+                    "{}: {}",
                     hutstr,
                     data.iter()
                         .map(|v| format!("{v:02x}"))
                         .collect::<Vec<String>>()
                         .join(" ")
-                );
+                )
             }
         }
         Field::Array(arr) => {
@@ -929,44 +1041,41 @@ fn print_field_values(bytes: &[u8], field: &Field) {
             if arr.usages().len() > 1 {
                 let usage_range = arr.usage_range();
 
-                vs.iter().for_each(|v| {
-                    // Does the value have a usage page?
-                    let usage = if (v & 0xffff0000) != 0 {
-                        Usage::from(*v)
-                    } else {
-                        Usage::from_page_and_id(
-                            usage_range.minimum().usage_page(),
-                            UsageId::from(*v as u16),
-                        )
-                    };
-                    // Usage within range?
-                    if let Some(usage) = usage_range.lookup_usage(&usage) {
-                        let hutstr = get_hut_str(usage);
-                        cprint!(Styles::None, "{}: {:5} | ", hutstr, v);
-                    } else {
-                        // Let's just print the value as-is
-                        cprint!(Styles::None, "{v:02x} | ");
-                    }
-                });
+                vs.iter()
+                    .map(|v| {
+                        // Does the value have a usage page?
+                        let usage = if (v & 0xffff0000) != 0 {
+                            Usage::from(*v)
+                        } else {
+                            Usage::from_page_and_id(
+                                usage_range.minimum().usage_page(),
+                                UsageId::from(*v as u16),
+                            )
+                        };
+                        // Usage within range?
+                        if let Some(usage) = usage_range.lookup_usage(&usage) {
+                            let hutstr = get_hut_str(usage);
+                            format!("{}: {:5}", hutstr, v)
+                        } else {
+                            // Let's just print the value as-is
+                            format!("{v:02x}")
+                        }
+                    })
+                    .collect::<Vec<String>>()
+                    .join("| ")
             } else {
                 let hutstr = match arr.usages().first() {
                     Some(usage) => get_hut_str(usage),
                     None => "<unknown>".to_string(),
                 };
-                cprint!(
-                    Styles::None,
-                    "{hutstr}: {} |",
+                format!(
+                    "{hutstr}: {}",
                     vs.iter()
                         .fold("".to_string(), |acc, b| format!("{acc}{b:02x} "))
-                );
+                )
             }
         }
     }
-}
-
-fn print_style_prefix(style: &Styles) {
-    cprint!(Styles::None, "# ");
-    cprint!(style, " ");
 }
 
 pub fn print_input_report_description(bytes: &[u8], rdesc: &ReportDescriptor) -> Result<()> {
@@ -974,13 +1083,8 @@ pub fn print_input_report_description(bytes: &[u8], rdesc: &ReportDescriptor) ->
         bail!("Unable to find matching report");
     };
 
-    let report_style = if let Some(id) = report.report_id() {
-        let report_style = Styles::Report { report_id: *id };
-        print_style_prefix(&report_style);
-        cprintln!(Styles::None, " Report ID: {id} / ");
-        report_style
-    } else {
-        Styles::None
+    if let Some(id) = report.report_id() {
+        Outfile::new().report_comment(report.report_id(), format!(" Report ID: {id} / ").as_ref());
     };
 
     let collections: HashSet<&Collection> = report
@@ -990,32 +1094,36 @@ pub fn print_input_report_description(bytes: &[u8], rdesc: &ReportDescriptor) ->
         .filter(|c| matches!(c.collection_type(), CollectionType::Logical))
         .collect();
     if collections.is_empty() {
-        print_style_prefix(&report_style);
-        cprint!(Styles::None, "              ");
-        for field in report.fields() {
-            print_field_values(bytes, field);
-        }
-        cprintln!();
+        let msg = report
+            .fields()
+            .iter()
+            .map(|f| print_field_values(bytes, f))
+            .collect::<Vec<String>>()
+            .join(" |");
+        Outfile::new().report_comment(report.report_id(), format!("              {msg}").as_str());
     } else {
         let mut collections: Vec<&Collection> = collections.into_iter().collect();
         collections.sort_by(|a, b| a.id().partial_cmp(b.id()).unwrap());
 
         for collection in collections {
-            print_style_prefix(&report_style);
-            cprint!(Styles::None, "              ");
-            for field in report.fields().iter().filter(|f| {
-                // logical collections may be nested, so we only group those items together
-                // where the deepest logical collection matches
-                f.collections()
-                    .iter()
-                    .rev()
-                    .find(|c| matches!(c.collection_type(), CollectionType::Logical))
-                    .map(|c| c == collection)
-                    .unwrap_or(false)
-            }) {
-                print_field_values(bytes, field);
-            }
-            cprintln!();
+            let msg = report
+                .fields()
+                .iter()
+                .filter(|f| {
+                    // logical collections may be nested, so we only group those items together
+                    // where the deepest logical collection matches
+                    f.collections()
+                        .iter()
+                        .rev()
+                        .find(|c| matches!(c.collection_type(), CollectionType::Logical))
+                        .map(|c| c == collection)
+                        .unwrap_or(false)
+                })
+                .map(|f| print_field_values(bytes, f))
+                .collect::<Vec<String>>()
+                .join(" |");
+            Outfile::new()
+                .report_comment(report.report_id(), format!("              {msg}").as_str());
         }
     }
 
@@ -1031,15 +1139,18 @@ pub fn print_input_report_data(
         bail!("Unable to find matching report");
     };
 
-    cprintln!(
-        Styles::Data,
-        "E: {:06}.{:06} {} {}",
-        elapsed.as_secs(),
-        elapsed.as_micros() % 1000000,
-        report.size_in_bytes(),
-        bytes[..report.size_in_bytes()]
-            .iter()
-            .fold("".to_string(), |acc, b| format!("{acc}{b:02x} "))
+    Outfile::new().write_data(
+        Prefix::Event,
+        format!(
+            "{:06}.{:06} {} {}",
+            elapsed.as_secs(),
+            elapsed.as_micros() % 1000000,
+            report.size_in_bytes(),
+            bytes[..report.size_in_bytes()]
+                .iter()
+                .fold("".to_string(), |acc, b| format!("{acc}{b:02x} "))
+        )
+        .as_ref(),
     );
 
     Ok(())
@@ -1049,13 +1160,16 @@ pub fn print_bpf_input_report_data(bytes: &[u8], elapsed: &Duration) {
     let bytes = bytes
         .iter()
         .fold("".to_string(), |acc, b| format!("{acc}{b:02x} "));
-    cprintln!(
-        Styles::Bpf,
-        "B: {:06}.{:06} {} {}",
-        elapsed.as_secs(),
-        elapsed.as_micros() % 1000000,
-        bytes.len(),
-        bytes,
+    Outfile::new().write_data(
+        Prefix::Bpf,
+        format!(
+            "{:06}.{:06} {} {}",
+            elapsed.as_secs(),
+            elapsed.as_micros() % 1000000,
+            bytes.len(),
+            bytes,
+        )
+        .as_ref(),
     );
 }
 
@@ -1064,11 +1178,7 @@ pub fn print_current_time(last_timestamp: Option<Instant>) -> Option<Instant> {
     let elapsed = prev_timestamp.elapsed().as_secs();
     let now = chrono::prelude::Local::now();
     if last_timestamp.is_none() || (elapsed > 1 && now.timestamp() % 5 == 0) {
-        cprintln!(
-            Styles::Timestamp,
-            "# Current time: {}",
-            now.format("%H:%M:%S").to_string()
-        );
+        Outfile::new().write_timestamp();
         Some(Instant::now())
     } else {
         last_timestamp
@@ -1108,16 +1218,10 @@ fn find_device() -> Result<PathBuf> {
 fn process(backend: impl Backend, opts: &Options) -> Result<()> {
     let rdesc = parse_report_descriptor(&backend, &opts)?;
     if !opts.only_describe {
-        cprintln!(
-            Styles::Separator,
-            "##############################################################################"
-        );
-        cprintln!(Styles::None, "# Recorded events below in format:");
-        cprintln!(
-            Styles::None,
-            "# E: <seconds>.<microseconds> <length-in-bytes> [bytes ...]",
-        );
-        cprintln!(Styles::None, "#");
+        Outfile::new().separator();
+        Outfile::new().write_comment("Recorded events below in format:");
+        Outfile::new().write_comment("E: <seconds>.<microseconds> <length-in-bytes> [bytes ...]");
+        Outfile::new().write_comment("");
         backend.read_events(opts.bpf, &rdesc)?;
     }
     Ok(())
