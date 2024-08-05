@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
 use std::cell::OnceCell;
 use std::fs::OpenOptions;
@@ -194,8 +194,20 @@ impl TryFrom<&Path> for HidrawBackend {
                 bail!("Empty report descriptor");
             }
 
-            let device_path = if path.starts_with("/dev") {
+            let pathstr = path.to_string_lossy();
+            let device_path = if pathstr.starts_with("/dev/hidraw") {
                 Some(PathBuf::from(path))
+            } else if pathstr.starts_with("/dev/input/event") {
+                // uevent should contain
+                // DEVNAME=hidraw0
+                let uevent_path = sysfs.parent().unwrap().join("uevent");
+                let uevent = std::fs::read_to_string(uevent_path)?;
+                let name = uevent
+                    .lines()
+                    .find(|l| l.starts_with("DEVNAME"))
+                    .context("Unable to find DEVNAME in uevent")?;
+                let (_, name) = name.split_once('=').context("Unexpected DEVNAME= format")?;
+                Some(PathBuf::from("/dev/").join(name))
             } else {
                 None
             };
