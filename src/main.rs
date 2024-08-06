@@ -130,9 +130,10 @@ impl Outfile {
         };
 
         let indented = format!("{:indent$}{}", "", item);
+        let prefix = style.as_str();
         self.writeln(
             &style,
-            format!("# {bytes:30} // {indented:41} {offset}").as_ref(),
+            format!("# {prefix} {bytes:30} // {indented:41} {offset}").as_ref(),
         );
     }
 
@@ -154,7 +155,7 @@ impl Outfile {
             Styles::None
         };
         self.write(&Styles::None, "# ");
-        self.write(&report_style, " ");
+        self.write(&report_style, report_style.as_str());
         self.write(&Styles::None, " ");
     }
 
@@ -292,6 +293,32 @@ impl From<&Styles> for Style {
                 6 => Rgb(0xe5, 0xc4, 0x94),
                 _ => Rgb(0x66, 0xc2, 0xa5),
             }),
+        }
+    }
+}
+
+impl Styles {
+    fn as_str(&self) -> &str {
+        match self {
+            Styles::None => " ",
+            Styles::Bpf => "",
+            Styles::Data => "",
+            Styles::Note => " ",
+            Styles::InputItem => "┇",
+            Styles::OutputItem => "┊",
+            Styles::FeatureItem => "║",
+            Styles::ReportId => "┅",
+            Styles::Separator => "",
+            Styles::Timestamp => "",
+            Styles::Report { report_id } => match u8::from(report_id) % 7 {
+                1 => "░",
+                2 => "▒",
+                3 => "▓",
+                4 => "▚",
+                5 => "▞",
+                6 => "▃",
+                _ => "▘",
+            },
         }
     }
 }
