@@ -4,9 +4,18 @@
 use anyhow::{bail, Context, Result};
 use std::io::Read;
 use std::path::Path;
+use std::time::Duration;
 use yaml_rust2::{Yaml, YamlLoader};
 
-use crate::{Backend, BpfOption, ReportDescriptor};
+use crate::{
+    print_input_report_data, print_input_report_description, Backend, BpfOption, ReportDescriptor,
+};
+
+#[derive(Debug)]
+struct HidrawEvent {
+    usecs: u64,
+    bytes: Vec<u8>,
+}
 
 #[derive(Debug)]
 pub struct LibinputRecordingBackend {
@@ -15,6 +24,7 @@ pub struct LibinputRecordingBackend {
     vid: u32,
     pid: u32,
     rdesc: Vec<u8>,
+    events: Vec<HidrawEvent>,
 }
 
 impl TryFrom<&Path> for LibinputRecordingBackend {
@@ -90,12 +100,61 @@ impl TryFrom<&Path> for LibinputRecordingBackend {
             .get(2)
             .context("Malformed libinput recording - missing pid")?;
 
+        let evlist = device
+            .get(&Yaml::String("events".into()))
+            .context("Not a libinput recording - events element missing")?
+            .as_vec()
+            .context("Malformed libinput recording - events not an array")?;
+
+        // The key isn't fixed, might be hidraw1, hidraw2, ...
+        // We only care about the first one found and only search
+        // for that one in the rest of the recording.
+        // A recording that alternates hidraw events is so niche we don't
+        // need to care about it.
+        let hidraw_node = evlist
+            .iter()
+            .filter_map(|event| event.as_hash())
+            .filter_map(|event| event.get(&Yaml::String("hid".into()))?.as_hash())
+            .find_map(|hid| {
+                hid.keys()
+                    .find(|key| key.as_str().filter(|k| k.starts_with("hidraw")).is_some())
+            });
+
+        let events: Vec<HidrawEvent> = if let Some(hidraw_node) = hidraw_node {
+            evlist
+                .iter()
+                .filter_map(|event| event.as_hash())
+                .filter_map(|event| event.get(&Yaml::String("hid".into()))?.as_hash())
+                .filter_map(|hid| {
+                    let ts = hid.get(&Yaml::String("time".into()))?.as_vec()?;
+                    let secs = ts.first()?.as_i64()? as u64;
+                    let usecs = ts.get(1)?.as_i64()? as u64;
+                    let bytes = hid
+                        .get(hidraw_node)?
+                        .as_vec()?
+                        .iter()
+                        .map(|id| {
+                            id.as_i64()
+                                .and_then(|i| u8::try_from(i).ok())
+                                .context("Malformed libinput recording - hidraw bytes not u8")
+                        })
+                        .collect::<Result<Vec<u8>, anyhow::Error>>()
+                        .ok()?;
+                    Some((secs * 1_000_000u64 + usecs, bytes))
+                })
+                .map(|(usecs, bytes)| HidrawEvent { usecs, bytes })
+                .collect::<Vec<HidrawEvent>>()
+        } else {
+            Vec::new()
+        };
+
         Ok(LibinputRecordingBackend {
             name: String::from(name),
             bustype,
             vid,
             pid,
             rdesc: bytes,
+            events,
         })
     }
 }
@@ -121,9 +180,13 @@ impl Backend for LibinputRecordingBackend {
         &self.rdesc
     }
 
-    fn read_events(&self, _use_bpf: BpfOption, _rdesc: &ReportDescriptor) -> Result<()> {
-        // libinput recordings very rarely have HID events so let's not bother
-        // until we need this
+    fn read_events(&self, _use_bpf: BpfOption, rdesc: &ReportDescriptor) -> Result<()> {
+        for e in self.events.iter() {
+            let elapsed = Duration::from_micros(e.usecs);
+            print_input_report_description(&e.bytes, rdesc)?;
+            print_input_report_data(&e.bytes, rdesc, &elapsed)?;
+        }
+
         Ok(())
     }
 }
