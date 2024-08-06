@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 use anyhow::{bail, Context, Result};
-use clap::{ColorChoice, Parser};
+use clap::{ColorChoice, Parser, ValueEnum};
 use owo_colors::{OwoColorize, Rgb, Stream::Stdout, Style};
 use std::collections::HashSet;
 use std::io::Write;
@@ -302,6 +302,14 @@ mod hidraw;
 mod hidrecording;
 mod libinput;
 
+#[derive(ValueEnum, Clone, Debug)]
+enum InputFormat {
+    Auto,
+    Hidraw,
+    LibinputRecording,
+    HidRecording,
+}
+
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -318,6 +326,10 @@ struct Cli {
 
     #[arg(long, default_value_t = ("-").to_string())]
     output_file: String,
+
+    // Explicitly specify the input format (usually auto is enough)
+    #[arg(long, value_enum, default_value_t = InputFormat::Auto)]
+    input_format: InputFormat,
 
     /// Only describe the device, do not wait for events
     #[arg(long, default_value_t = false)]
@@ -1236,20 +1248,42 @@ fn hid_recorder() -> Result<()> {
         Some(path) => path,
         None => find_device()?,
     };
+    let path = path.as_path();
+    let input_format = if path.starts_with("/sys") || path.starts_with("/dev") {
+        InputFormat::Hidraw
+    } else {
+        cli.input_format
+    };
 
     let opts = Options {
         full: cli.full,
         only_describe: cli.only_describe,
         bpf: cli.bpf,
     };
-    if let Ok(backend) = hidraw::HidrawBackend::try_from(path.as_path()) {
-        process(backend, &opts)
-    } else if let Ok(backend) = libinput::LibinputRecordingBackend::try_from(path.as_path()) {
-        process(backend, &opts)
-    } else if let Ok(backend) = hidrecording::HidRecorderBackend::try_from(path.as_path()) {
-        process(backend, &opts)
-    } else {
-        bail!("Unrecognized file format");
+    match input_format {
+        InputFormat::Hidraw => {
+            let backend = hidraw::HidrawBackend::try_from(path)?;
+            process(backend, &opts)
+        }
+        InputFormat::LibinputRecording => {
+            let backend = libinput::LibinputRecordingBackend::try_from(path)?;
+            process(backend, &opts)
+        }
+        InputFormat::HidRecording => {
+            let backend = hidrecording::HidRecorderBackend::try_from(path)?;
+            process(backend, &opts)
+        }
+        InputFormat::Auto => {
+            if let Ok(backend) = hidraw::HidrawBackend::try_from(path) {
+                process(backend, &opts)
+            } else if let Ok(backend) = libinput::LibinputRecordingBackend::try_from(path) {
+                process(backend, &opts)
+            } else if let Ok(backend) = hidrecording::HidRecorderBackend::try_from(path) {
+                process(backend, &opts)
+            } else {
+                bail!("Unrecognized file format");
+            }
+        }
     }
 }
 
