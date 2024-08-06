@@ -82,7 +82,7 @@ impl Outfile {
         write!(
             self,
             "{}",
-            msg.if_supports_color(Stdout, |text| text.style(style.style()))
+            msg.if_supports_color(Stdout, |text| text.style(style.into()))
         )
         .unwrap();
     }
@@ -91,7 +91,7 @@ impl Outfile {
         writeln!(
             self,
             "{}",
-            msg.if_supports_color(Stdout, |text| text.style(style.style()))
+            msg.if_supports_color(Stdout, |text| text.style(style.into()))
         )
         .unwrap();
     }
@@ -270,9 +270,9 @@ pub enum Styles {
     Bpf,
 }
 
-impl Styles {
-    fn style(&self) -> Style {
-        match self {
+impl From<&Styles> for Style {
+    fn from(styles: &Styles) -> Style {
+        match styles {
             Styles::None => Style::new(),
             Styles::Bpf => Style::new().blue(),
             Styles::Data => Style::new().red(),
