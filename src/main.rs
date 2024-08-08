@@ -1,20 +1,15 @@
 // SPDX-License-Identifier: MIT
 
 use anyhow::{bail, Context, Result};
-use clap::{ColorChoice, Parser};
-use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
+use clap::{ColorChoice, Parser, ValueEnum};
 use owo_colors::{OwoColorize, Rgb, Stream::Stdout, Style};
-use std::cell::OnceCell;
 use std::collections::HashSet;
-use std::fs::OpenOptions;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::ops::Deref;
-use std::os::fd::{AsFd, AsRawFd};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::OnceLock;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 // we reuse ColorChoice for your `--bpf` argument
 use clap::ColorChoice as BpfOption;
@@ -25,31 +20,38 @@ use hidreport::hid::{
 };
 use hidreport::*;
 
-use libbpf_rs::libbpf_sys;
-use libbpf_rs::skel::OpenSkel as _;
-use libbpf_rs::skel::SkelBuilder as _;
-
-mod hidrecord {
-    include!(env!("SKELFILE"));
-}
-mod hidrecord_tracing {
-    include!(env!("SKELFILE_TRACING"));
-}
-
-use hidrecord::*;
-use hidrecord_tracing::*;
-
 static mut OUTFILE: OnceLock<
     std::sync::Mutex<std::cell::RefCell<std::io::LineWriter<std::fs::File>>>,
 > = OnceLock::new();
 
-enum Outfile {
+pub enum Prefix {
+    Name,
+    Id,
+    ReportDescriptor,
+    Event,
+    Bpf,
+}
+
+impl std::fmt::Display for Prefix {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Prefix::Name => "N",
+            Prefix::Id => "I",
+            Prefix::ReportDescriptor => "R",
+            Prefix::Event => "E",
+            Prefix::Bpf => "B",
+        };
+        write!(f, "{s}:")
+    }
+}
+
+pub enum Outfile {
     Stdout,
     File(&'static mut std::sync::Mutex<std::cell::RefCell<std::io::LineWriter<std::fs::File>>>),
 }
 
 impl Outfile {
-    fn new() -> Self {
+    pub fn new() -> Self {
         unsafe {
             match OUTFILE.get_mut() {
                 None => Outfile::Stdout,
@@ -74,6 +76,144 @@ impl Outfile {
             };
         }
         Ok(())
+    }
+
+    fn write(&mut self, style: &Styles, msg: &str) {
+        write!(
+            self,
+            "{}",
+            msg.if_supports_color(Stdout, |text| text.style(style.into()))
+        )
+        .unwrap();
+    }
+
+    fn writeln(&mut self, style: &Styles, msg: &str) {
+        writeln!(
+            self,
+            "{}",
+            msg.if_supports_color(Stdout, |text| text.style(style.into()))
+        )
+        .unwrap();
+    }
+
+    /// Write a generic unstyled comment
+    pub fn write_comment(&mut self, msg: &str) {
+        self.writeln(&Styles::None, format!("# {msg}").as_ref());
+    }
+
+    /// Write a generic comment with styling
+    pub fn write_comment_styled(&mut self, style: Styles, msg: &str) {
+        self.writeln(&style, format!("# {msg}").as_ref());
+    }
+
+    /// Write the item information as a comment (typically at the top of the file)
+    pub fn write_item_comment(
+        &mut self,
+        item_type: ItemType,
+        item: &str,
+        bytes: &[u8],
+        indent: usize,
+        offset: usize,
+    ) {
+        let bytes = bytes
+            .iter()
+            .map(|b| format!("0x{b:02x}, "))
+            .collect::<Vec<String>>()
+            .join("");
+
+        let style = match item_type {
+            ItemType::Main(MainItem::Input(..)) => Styles::InputItem,
+            ItemType::Main(MainItem::Output(..)) => Styles::OutputItem,
+            ItemType::Main(MainItem::Feature(..)) => Styles::FeatureItem,
+            ItemType::Global(GlobalItem::ReportId { .. }) => Styles::ReportId,
+            _ => Styles::None,
+        };
+
+        let indented = format!("{:indent$}{}", "", item);
+        let prefix = style.as_str();
+        self.writeln(
+            &style,
+            format!("# {prefix} {bytes:30} // {indented:41} {offset}").as_ref(),
+        );
+    }
+
+    /// Print a separator line for logical separation between sections
+    pub fn separator(&mut self) {
+        self.writeln(
+            &Styles::Separator,
+            "##############################################################################",
+        );
+    }
+
+    /// Write the (colored) prefix for the given report, if any
+    pub fn report_comment_prefix(&mut self, report_id: &Option<ReportId>) {
+        let report_style = if let Some(report_id) = report_id {
+            Styles::Report {
+                report_id: *report_id,
+            }
+        } else {
+            Styles::None
+        };
+        self.write(&Styles::None, "# ");
+        self.write(&report_style, report_style.as_str());
+        self.write(&Styles::None, " ");
+    }
+
+    /// Print a comment related to some report, prefixed with a colored
+    /// version of the report id
+    pub fn report_comment(&mut self, report_id: &Option<ReportId>, msg: &str) {
+        self.report_comment_prefix(report_id);
+        self.writeln(&Styles::None, msg);
+    }
+
+    /// Print a comment related to some report, the comment message contains
+    /// of several individually styled components
+    pub fn report_comment_components(
+        &mut self,
+        report_id: &Option<ReportId>,
+        components: &[(Styles, String)],
+    ) {
+        self.report_comment_prefix(report_id);
+        for (style, msg) in components {
+            Outfile::new().write(style, format!("{}", msg).as_ref());
+        }
+        self.writeln(&Styles::None, "");
+    }
+
+    /// Write an actual data entry (unlike a comment)
+    pub fn write_data(&mut self, prefix: Prefix, datastr: &str) {
+        self.writeln(&Styles::Data, format!("{prefix} {datastr}").as_str());
+    }
+
+    pub fn write_name(&mut self, name: &str) {
+        self.write_data(Prefix::Name, format!("{name}").as_str());
+    }
+    pub fn write_id(&mut self, bustype: u32, vid: u32, pid: u32) {
+        self.write_data(Prefix::Id, format!("{bustype:x} {vid:x} {pid:x}").as_str());
+    }
+
+    pub fn write_report_descriptor(&mut self, bytes: &[u8]) {
+        let bytestr = bytes
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<String>>()
+            .join(" ");
+        self.write_data(
+            Prefix::ReportDescriptor,
+            format!("{} {bytestr}", bytes.len()).as_str(),
+        );
+    }
+
+    /// Write a timestamp comment
+    pub fn write_timestamp(&mut self) {
+        self.writeln(
+            &Styles::Timestamp,
+            format!(
+                "# Current time: {}",
+                chrono::prelude::Local::now().format("%H:%M:%S").to_string()
+            )
+            .as_ref(),
+        )
     }
 }
 
@@ -104,38 +244,17 @@ impl Write for Outfile {
     }
 }
 
-const PACKET_SIZE: usize = 64;
-
-// A Rust version of hid_recorder_event in hidrecord.bpf.c
-// struct hid_recorder_event {
-// 	__u8 length;
-// 	__u8 data[64];
-// };
-#[allow(non_camel_case_types)]
-#[repr(C)]
-struct hid_recorder_event {
-    packet_count: u8,
-    packet_number: u8,
-    length: u8,
-    data: [u8; PACKET_SIZE],
+trait Backend {
+    fn name(&self) -> &str;
+    fn bustype(&self) -> u32;
+    fn vid(&self) -> u32;
+    fn pid(&self) -> u32;
+    fn rdesc(&self) -> &[u8];
+    fn read_events(&self, use_bpf: BpfOption, rdesc: &ReportDescriptor) -> Result<()>;
 }
 
-// A Rust version of attach_prog_args in hidrecord_tracing.bpf.c
-// struct attach_prog_args {
-// 	int prog_fd;
-// 	unsigned int hid;
-// 	int retval;
-// };
-#[allow(non_camel_case_types)]
-#[repr(C)]
-struct attach_prog_args {
-    prog_fd: i32,
-    hid: u32,
-    retval: i32,
-}
-
-#[derive(Default)]
-enum Styles {
+#[derive(Default, Clone)]
+pub enum Styles {
     #[default]
     None,
     InputItem,
@@ -152,9 +271,9 @@ enum Styles {
     Bpf,
 }
 
-impl Styles {
-    fn style(&self) -> Style {
-        match self {
+impl From<&Styles> for Style {
+    fn from(styles: &Styles) -> Style {
+        match styles {
             Styles::None => Style::new(),
             Styles::Bpf => Style::new().blue(),
             Styles::Data => Style::new().red(),
@@ -178,28 +297,44 @@ impl Styles {
     }
 }
 
-const MAX_USAGES_DISPLAYED: usize = 5;
-
-// Usage: cprintln!(Styles::Data, <normal println args>)
-//    or: cprintln!()
-macro_rules! cprintln {
-    () => { writeln!(Outfile::new()).unwrap() };
-    ($style:expr, $($arg:tt)*) => {{
-        writeln!(Outfile::new(),
-                 "{}",
-                 format!($($arg)*).if_supports_color(Stdout, |text| text.style($style.style())))
-        .unwrap();
-    }};
+impl Styles {
+    fn as_str(&self) -> &str {
+        match self {
+            Styles::None => " ",
+            Styles::Bpf => "",
+            Styles::Data => "",
+            Styles::Note => " ",
+            Styles::InputItem => "┇",
+            Styles::OutputItem => "┊",
+            Styles::FeatureItem => "║",
+            Styles::ReportId => "┅",
+            Styles::Separator => "",
+            Styles::Timestamp => "",
+            Styles::Report { report_id } => match u8::from(report_id) % 7 {
+                1 => "░",
+                2 => "▒",
+                3 => "▓",
+                4 => "▚",
+                5 => "▞",
+                6 => "▃",
+                _ => "▘",
+            },
+        }
+    }
 }
 
-// Usage: cprint!(Styles::Data, <normal println args>)
-macro_rules! cprint {
-    ($style:expr, $($arg:tt)*) => {{
-        write!(Outfile::new(),
-               "{}",
-               format!($($arg)*).if_supports_color(Stdout, |text| text.style($style.style())))
-        .unwrap();
-    }};
+const MAX_USAGES_DISPLAYED: usize = 5;
+
+mod hidraw;
+mod hidrecording;
+mod libinput;
+
+#[derive(ValueEnum, Clone, Debug)]
+enum InputFormat {
+    Auto,
+    Hidraw,
+    LibinputRecording,
+    HidRecording,
 }
 
 #[derive(Parser, Debug)]
@@ -219,6 +354,10 @@ struct Cli {
     #[arg(long, default_value_t = ("-").to_string())]
     output_file: String,
 
+    // Explicitly specify the input format (usually auto is enough)
+    #[arg(long, value_enum, default_value_t = InputFormat::Auto)]
+    input_format: InputFormat,
+
     /// Only describe the device, do not wait for events
     #[arg(long, default_value_t = false)]
     only_describe: bool,
@@ -234,41 +373,11 @@ struct Cli {
     path: Option<PathBuf>,
 }
 
+#[derive(Default)]
 struct Options {
     full: bool,
-}
-
-struct RDescFile {
-    path: PathBuf,
-    name: Option<String>,
-    bustype: u32,
-    vid: u32,
-    pid: u32,
-}
-
-#[derive(Debug)]
-pub enum BpfError {
-    LibBPFError { error: libbpf_rs::Error },
-    OsError { errno: u32 },
-}
-
-impl std::error::Error for BpfError {}
-
-impl std::fmt::Display for BpfError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BpfError::LibBPFError { error } => write!(f, "{error}"),
-            BpfError::OsError { errno } => {
-                write!(f, "{}", libbpf_rs::Error::from_raw_os_error(*errno as i32))
-            }
-        }
-    }
-}
-
-impl From<libbpf_rs::Error> for BpfError {
-    fn from(e: libbpf_rs::Error) -> BpfError {
-        BpfError::LibBPFError { error: e }
-    }
+    only_describe: bool,
+    bpf: ColorChoice,
 }
 
 fn fmt_main_item(item: &MainItem) -> String {
@@ -450,26 +559,16 @@ fn print_rdesc_items(bytes: &[u8]) -> Result<()> {
     for rdesc_item in rdesc_items.iter() {
         let item = rdesc_item.item();
         let offset = rdesc_item.offset();
-        let bytes = item
-            .bytes()
-            .iter()
-            .map(|b| format!("0x{b:02x}, "))
-            .collect::<Vec<String>>()
-            .join("");
-
         if let ItemType::Main(MainItem::EndCollection) = item.item_type() {
             indent -= 2;
         }
-
-        let indented = format!("{:indent$}{}", "", fmt_item(item, &current_usage_page));
-        let style = match item.item_type() {
-            ItemType::Main(MainItem::Input(..)) => Styles::InputItem,
-            ItemType::Main(MainItem::Output(..)) => Styles::OutputItem,
-            ItemType::Main(MainItem::Feature(..)) => Styles::FeatureItem,
-            ItemType::Global(GlobalItem::ReportId { .. }) => Styles::ReportId,
-            _ => Styles::None,
-        };
-        cprintln!(style, "# {bytes:30} // {indented:41} {offset}");
+        Outfile::new().write_item_comment(
+            item.item_type(),
+            fmt_item(item, &current_usage_page).as_ref(),
+            item.bytes(),
+            indent,
+            offset,
+        );
 
         match item.item_type() {
             ItemType::Main(MainItem::Collection(_)) => indent += 2,
@@ -484,7 +583,7 @@ fn print_rdesc_items(bytes: &[u8]) -> Result<()> {
 }
 
 // This would be easier with udev but let's keep the dependencies relatively minimal.
-fn find_sysfs_path(path: &Path) -> Result<PathBuf> {
+pub fn find_sysfs_path(path: &Path) -> Result<PathBuf> {
     let pathstr = path.to_string_lossy();
     let sysfs: PathBuf;
     if pathstr.starts_with("/dev/hidraw") {
@@ -621,7 +720,7 @@ fn bits_to_str(bits: &std::ops::Range<usize>) -> String {
 #[derive(Default)]
 struct PrintableColumn {
     string: String,
-    style: Styles,
+    style: Styles, // FIXME
 }
 
 impl From<&str> for PrintableColumn {
@@ -737,20 +836,13 @@ fn repeat_usage_filler(count: usize) -> PrintableRow {
 
 /// Print the parsed reports as an outline of how they look like
 fn print_report_summary(r: &impl Report, opts: &Options) {
-    let report_style;
-
-    if r.report_id().is_some() {
-        let report_id = r.report_id().unwrap();
-        report_style = Styles::Report { report_id };
-        cprint!(Styles::None, "# ");
-        cprint!(report_style, " ");
-        cprintln!(Styles::None, " Report ID: {}", report_id);
-    } else {
-        report_style = Styles::None;
+    if let Some(report_id) = r.report_id() {
+        Outfile::new().report_comment(r.report_id(), format!("Report ID: {}", report_id).as_str());
     }
-    cprint!(Styles::None, "# ");
-    cprint!(report_style, " ");
-    cprintln!(Styles::None, " | Report size: {} bits", r.size_in_bits());
+    Outfile::new().report_comment(
+        r.report_id(),
+        format!(" | Report size: {} bits", r.size_in_bits()).as_str(),
+    );
 
     const REPEAT_LIMIT: usize = 3;
 
@@ -851,17 +943,21 @@ fn print_report_summary(r: &impl Report, opts: &Options) {
         table.add(repeat_usage_filler(repeat_usage_count));
     }
     for row in table.rows {
-        cprint!(Styles::None, "# ");
-        cprint!(report_style, " ");
-        cprint!(Styles::None, " ");
-        for (idx, col) in row.columns().enumerate() {
-            cprint!(col.style, "| {:w$} ", col.string, w = table.colwidths[idx]);
-        }
-        cprintln!();
+        let components = row
+            .columns()
+            .enumerate()
+            .map(|(idx, col)| {
+                (
+                    col.style.clone(),
+                    format!("{:w$} ", col.string, w = table.colwidths[idx]),
+                )
+            })
+            .collect::<Vec<(Styles, String)>>();
+        Outfile::new().report_comment_components(r.report_id(), components.as_slice());
     }
 }
 
-fn parse_uevent(sysfs: &Path) -> Result<(String, (u32, u32, u32))> {
+pub fn parse_uevent(sysfs: &Path) -> Result<(String, (u32, u32, u32))> {
     // uevent should contain
     // HID_NAME=foo bar
     // HID_ID=00003:0002135:0000123513
@@ -891,90 +987,43 @@ fn parse_uevent(sysfs: &Path) -> Result<(String, (u32, u32, u32))> {
     Ok((name.to_string(), (bustype, vid, pid)))
 }
 
-fn find_rdesc(path: &Path) -> Result<RDescFile> {
-    if ["/dev", "/sys"]
-        .iter()
-        .any(|prefix| path.starts_with(prefix))
-    {
-        let sysfs = find_sysfs_path(path)?;
-        let rdesc_path = sysfs.join("report_descriptor");
-        if !rdesc_path.exists() {
-            bail!("Unable to find report descriptor at {rdesc_path:?}");
-        }
+fn parse_report_descriptor(backend: &impl Backend, opts: &Options) -> Result<ReportDescriptor> {
+    let name = backend.name();
+    let (bustype, vid, pid) = (backend.bustype(), backend.vid(), backend.pid());
+    let bytes = backend.rdesc();
 
-        let (name, ids) = parse_uevent(&sysfs)?;
-        let (bustype, vid, pid) = ids;
-
-        Ok(RDescFile {
-            path: rdesc_path,
-            name: Some(name),
-            bustype,
-            vid,
-            pid,
-        })
-    } else {
-        // If it's a file, let's assume it's a binary rdesc file like
-        // the report_descriptor file.
-        Ok(RDescFile {
-            path: path.into(),
-            name: None,
-            bustype: 0,
-            vid: 0,
-            pid: 0,
-        })
-    }
-}
-
-fn parse(rdesc: &RDescFile, opts: &Options) -> Result<ReportDescriptor> {
-    let bytes = std::fs::read(&rdesc.path)?;
-    if bytes.is_empty() {
-        bail!("Empty report descriptor");
-    }
-    let name = if let Some(name) = &rdesc.name {
-        name.clone()
-    } else {
-        String::from("unknown")
-    };
-    let (bustype, vid, pid) = (rdesc.bustype, rdesc.vid, rdesc.pid);
-
-    cprintln!(Styles::None, "# {name}");
-    cprintln!(
-        Styles::None,
-        "# Report descriptor length: {} bytes",
-        bytes.len()
-    );
+    Outfile::new().write_comment(format!("{name}").as_str());
+    Outfile::new()
+        .write_comment(format!("Report descriptor length: {} bytes", bytes.len()).as_str());
     print_rdesc_items(&bytes)?;
 
     // Print the readable fields
-    let bytestr = bytes
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<Vec<String>>()
-        .join(" ");
-    cprintln!(Styles::Data, "R: {} {bytestr}", bytes.len());
-    cprintln!(Styles::Data, "N: {name}");
-    cprintln!(Styles::Data, "I: {bustype:x} {vid:x} {pid:x}");
+    Outfile::new().write_report_descriptor(bytes);
+    Outfile::new().write_name(name);
+    Outfile::new().write_id(bustype, vid, pid);
 
     let rdesc = ReportDescriptor::try_from(&bytes as &[u8])?;
-    cprintln!(Styles::None, "# Report descriptor:");
+    Outfile::new().write_comment("Report descriptor:");
     let input_reports = rdesc.input_reports();
     if !input_reports.is_empty() {
         for r in rdesc.input_reports() {
-            cprintln!(Styles::InputItem, "# ------- Input Report ------- ");
+            Outfile::new().write_comment_styled(Styles::InputItem, "------- Input Report ------- ");
             print_report_summary(r, opts);
         }
     }
     let output_reports = rdesc.output_reports();
     if !output_reports.is_empty() {
         for r in rdesc.output_reports() {
-            cprintln!(Styles::OutputItem, "# ------- Output Report ------- ");
+            Outfile::new()
+                .write_comment_styled(Styles::OutputItem, "------- Output Report ------- ");
             print_report_summary(r, opts);
         }
     }
     let feature_reports = rdesc.feature_reports();
     if !feature_reports.is_empty() {
         for r in rdesc.feature_reports() {
-            cprintln!(Styles::FeatureItem, "# ------- Feature Report ------- ");
+            Outfile::new()
+                .write_comment_styled(Styles::FeatureItem, "------- Feature Report ------- ");
             print_report_summary(r, opts);
         }
     }
@@ -996,38 +1045,33 @@ fn get_hut_str(usage: &Usage) -> String {
     }
 }
 
-fn print_field_values(bytes: &[u8], field: &Field) {
+fn print_field_values(bytes: &[u8], field: &Field) -> String {
     match field {
         Field::Constant(_) => {
-            cprint!(
-                Styles::None,
-                "<{} bits padding> | ",
-                field.bits().clone().count()
-            );
+            format!("<{} bits padding>", field.bits().clone().count())
         }
         Field::Variable(var) => {
             let hutstr = get_hut_str(&var.usage);
             if var.bits.len() <= 32 {
                 if var.is_signed() {
                     let v = var.extract_i32(bytes).unwrap();
-                    cprint!(Styles::None, "{}: {:5} | ", hutstr, v);
+                    format!("{}: {:5}", hutstr, v)
                 } else {
                     let v = var.extract_u32(bytes).unwrap();
-                    cprint!(Styles::None, "{}: {:5} | ", hutstr, v);
+                    format!("{}: {:5}", hutstr, v)
                 }
             } else {
                 // FIXME: output is not correct if start/end doesn't align with byte
                 // boundaries
                 let data = &bytes[var.bits.start / 8..var.bits.end / 8];
-                cprint!(
-                    Styles::None,
-                    "{}: {} | ",
+                format!(
+                    "{}: {}",
                     hutstr,
                     data.iter()
                         .map(|v| format!("{v:02x}"))
                         .collect::<Vec<String>>()
                         .join(" ")
-                );
+                )
             }
         }
         Field::Array(arr) => {
@@ -1036,63 +1080,50 @@ fn print_field_values(bytes: &[u8], field: &Field) {
             if arr.usages().len() > 1 {
                 let usage_range = arr.usage_range();
 
-                vs.iter().for_each(|v| {
-                    // Does the value have a usage page?
-                    let usage = if (v & 0xffff0000) != 0 {
-                        Usage::from(*v)
-                    } else {
-                        Usage::from_page_and_id(
-                            usage_range.minimum().usage_page(),
-                            UsageId::from(*v as u16),
-                        )
-                    };
-                    // Usage within range?
-                    if let Some(usage) = usage_range.lookup_usage(&usage) {
-                        let hutstr = get_hut_str(usage);
-                        cprint!(Styles::None, "{}: {:5} | ", hutstr, v);
-                    } else {
-                        // Let's just print the value as-is
-                        cprint!(Styles::None, "{v:02x} | ");
-                    }
-                });
+                vs.iter()
+                    .map(|v| {
+                        // Does the value have a usage page?
+                        let usage = if (v & 0xffff0000) != 0 {
+                            Usage::from(*v)
+                        } else {
+                            Usage::from_page_and_id(
+                                usage_range.minimum().usage_page(),
+                                UsageId::from(*v as u16),
+                            )
+                        };
+                        // Usage within range?
+                        if let Some(usage) = usage_range.lookup_usage(&usage) {
+                            let hutstr = get_hut_str(usage);
+                            format!("{}: {:5}", hutstr, v)
+                        } else {
+                            // Let's just print the value as-is
+                            format!("{v:02x}")
+                        }
+                    })
+                    .collect::<Vec<String>>()
+                    .join("| ")
             } else {
                 let hutstr = match arr.usages().first() {
                     Some(usage) => get_hut_str(usage),
                     None => "<unknown>".to_string(),
                 };
-                cprint!(
-                    Styles::None,
-                    "{hutstr}: {} |",
+                format!(
+                    "{hutstr}: {}",
                     vs.iter()
                         .fold("".to_string(), |acc, b| format!("{acc}{b:02x} "))
-                );
+                )
             }
         }
     }
 }
 
-fn print_style_prefix(style: &Styles) {
-    cprint!(Styles::None, "# ");
-    cprint!(style, " ");
-}
-
-fn parse_input_report(
-    bytes: &[u8],
-    rdesc: &ReportDescriptor,
-    start_time: &Instant,
-    ringbuf: Option<&libbpf_rs::RingBuffer>,
-) -> Result<()> {
+pub fn print_input_report_description(bytes: &[u8], rdesc: &ReportDescriptor) -> Result<()> {
     let Some(report) = rdesc.find_input_report(bytes) else {
         bail!("Unable to find matching report");
     };
 
-    let report_style = if let Some(id) = report.report_id() {
-        let report_style = Styles::Report { report_id: *id };
-        print_style_prefix(&report_style);
-        cprintln!(Styles::None, " Report ID: {id} / ");
-        report_style
-    } else {
-        Styles::None
+    if let Some(id) = report.report_id() {
+        Outfile::new().report_comment(report.report_id(), format!(" Report ID: {id} / ").as_ref());
     };
 
     let collections: HashSet<&Collection> = report
@@ -1102,153 +1133,94 @@ fn parse_input_report(
         .filter(|c| matches!(c.collection_type(), CollectionType::Logical))
         .collect();
     if collections.is_empty() {
-        print_style_prefix(&report_style);
-        cprint!(Styles::None, "              ");
-        for field in report.fields() {
-            print_field_values(bytes, field);
-        }
-        cprintln!();
+        let msg = report
+            .fields()
+            .iter()
+            .map(|f| print_field_values(bytes, f))
+            .collect::<Vec<String>>()
+            .join(" |");
+        Outfile::new().report_comment(report.report_id(), format!("              {msg}").as_str());
     } else {
         let mut collections: Vec<&Collection> = collections.into_iter().collect();
         collections.sort_by(|a, b| a.id().partial_cmp(b.id()).unwrap());
 
         for collection in collections {
-            print_style_prefix(&report_style);
-            cprint!(Styles::None, "              ");
-            for field in report.fields().iter().filter(|f| {
-                // logical collections may be nested, so we only group those items together
-                // where the deepest logical collection matches
-                f.collections()
-                    .iter()
-                    .rev()
-                    .find(|c| matches!(c.collection_type(), CollectionType::Logical))
-                    .map(|c| c == collection)
-                    .unwrap_or(false)
-            }) {
-                print_field_values(bytes, field);
-            }
-            cprintln!();
+            let msg = report
+                .fields()
+                .iter()
+                .filter(|f| {
+                    // logical collections may be nested, so we only group those items together
+                    // where the deepest logical collection matches
+                    f.collections()
+                        .iter()
+                        .rev()
+                        .find(|c| matches!(c.collection_type(), CollectionType::Logical))
+                        .map(|c| c == collection)
+                        .unwrap_or(false)
+                })
+                .map(|f| print_field_values(bytes, f))
+                .collect::<Vec<String>>()
+                .join(" |");
+            Outfile::new()
+                .report_comment(report.report_id(), format!("              {msg}").as_str());
         }
     }
 
-    if let Some(ringbuf) = ringbuf {
-        let _ = ringbuf.consume();
-    }
+    Ok(())
+}
 
-    let elapsed = start_time.elapsed();
+pub fn print_input_report_data(
+    bytes: &[u8],
+    rdesc: &ReportDescriptor,
+    elapsed: &Duration,
+) -> Result<()> {
+    let Some(report) = rdesc.find_input_report(bytes) else {
+        bail!("Unable to find matching report");
+    };
 
-    cprintln!(
-        Styles::Data,
-        "E: {:06}.{:06} {} {}",
-        elapsed.as_secs(),
-        elapsed.as_micros() % 1000000,
-        report.size_in_bytes(),
-        bytes[..report.size_in_bytes()]
-            .iter()
-            .fold("".to_string(), |acc, b| format!("{acc}{b:02x} "))
+    Outfile::new().write_data(
+        Prefix::Event,
+        format!(
+            "{:06}.{:06} {} {}",
+            elapsed.as_secs(),
+            elapsed.as_micros() % 1000000,
+            report.size_in_bytes(),
+            bytes[..report.size_in_bytes()]
+                .iter()
+                .fold("".to_string(), |acc, b| format!("{acc}{b:02x} "))
+        )
+        .as_ref(),
     );
 
     Ok(())
 }
 
-fn print_current_time(last_timestamp: Option<Instant>) -> Option<Instant> {
+pub fn print_bpf_input_report_data(bytes: &[u8], elapsed: &Duration) {
+    let bytes = bytes
+        .iter()
+        .fold("".to_string(), |acc, b| format!("{acc}{b:02x} "));
+    Outfile::new().write_data(
+        Prefix::Bpf,
+        format!(
+            "{:06}.{:06} {} {}",
+            elapsed.as_secs(),
+            elapsed.as_micros() % 1000000,
+            bytes.len(),
+            bytes,
+        )
+        .as_ref(),
+    );
+}
+
+pub fn print_current_time(last_timestamp: Option<Instant>) -> Option<Instant> {
     let prev_timestamp = last_timestamp.unwrap_or(Instant::now());
     let elapsed = prev_timestamp.elapsed().as_secs();
     let now = chrono::prelude::Local::now();
     if last_timestamp.is_none() || (elapsed > 1 && now.timestamp() % 5 == 0) {
-        cprintln!(
-            Styles::Timestamp,
-            "# Current time: {}",
-            now.format("%H:%M:%S").to_string()
-        );
+        Outfile::new().write_timestamp();
         Some(Instant::now())
     } else {
         last_timestamp
-    }
-}
-
-fn read_events(
-    path: &Path,
-    rdesc: &ReportDescriptor,
-    map_ringbuf: Option<&libbpf_rs::Map>,
-) -> Result<()> {
-    cprintln!(
-        Styles::Separator,
-        "##############################################################################"
-    );
-    cprintln!(Styles::None, "# Recorded events below in format:");
-    cprintln!(
-        Styles::None,
-        "# E: <seconds>.<microseconds> <length-in-bytes> [bytes ...]",
-    );
-    cprintln!(Styles::None, "#");
-
-    let mut f = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(path)?;
-
-    let timeout = PollTimeout::try_from(1000).unwrap();
-    let start_time: OnceCell<Instant> = OnceCell::new();
-    let mut last_timestamp: Option<Instant> = None;
-    let mut data = [0; 1024];
-    let mut bpf_vec = Vec::new();
-
-    let ringbuf = map_ringbuf.map(|map_ringbuf| {
-        let mut builder = libbpf_rs::RingBufferBuilder::new();
-        builder
-            .add(map_ringbuf, |data| {
-                event_handler(data, &mut bpf_vec, &start_time)
-            })
-            .unwrap();
-        builder.build().unwrap()
-    });
-
-    loop {
-        let mut pollfds = vec![PollFd::new(f.as_fd(), PollFlags::POLLIN)];
-        if let Some(ref ringbuf) = ringbuf {
-            let ringbuf_fd = unsafe {
-                std::os::fd::BorrowedFd::borrow_raw(ringbuf.epoll_fd() as std::os::fd::RawFd)
-            };
-            pollfds.push(PollFd::new(ringbuf_fd, PollFlags::POLLIN));
-        }
-
-        if poll(&mut pollfds, timeout)? > 0 {
-            let has_events: Vec<bool> = pollfds
-                .iter()
-                .map(|fd| fd.revents())
-                .map(|revents| revents.map_or(false, |flag| flag.intersects(PollFlags::POLLIN)))
-                .collect();
-
-            if has_events[0] {
-                match f.read(&mut data) {
-                    Ok(_nbytes) => {
-                        last_timestamp = print_current_time(last_timestamp);
-                        let _ = start_time.get_or_init(|| last_timestamp.unwrap());
-                        parse_input_report(
-                            &data,
-                            rdesc,
-                            start_time.get().unwrap(),
-                            ringbuf.as_ref(),
-                        )?;
-                    }
-                    Err(e) => {
-                        if e.kind() != std::io::ErrorKind::WouldBlock {
-                            bail!(e);
-                        }
-                    }
-                };
-            }
-            if *has_events.get(1).unwrap_or(&false) {
-                if let Some(ref ringbuf) = ringbuf {
-                    last_timestamp = print_current_time(last_timestamp);
-                    let _ = start_time.get_or_init(|| last_timestamp.unwrap());
-                    let _ = ringbuf.consume();
-                }
-            }
-        } else if last_timestamp.is_some() {
-            print_current_time(last_timestamp);
-        }
     }
 }
 
@@ -1282,160 +1254,16 @@ fn find_device() -> Result<PathBuf> {
     Ok(path)
 }
 
-fn event_handler(
-    data: &[u8],
-    buffer: &mut Vec<u8>,
-    start_time: &OnceCell<Instant>,
-) -> ::std::os::raw::c_int {
-    if data.len() != std::mem::size_of::<hid_recorder_event>() {
-        eprintln!(
-            "Invalid size {} != {}",
-            data.len(),
-            std::mem::size_of::<hid_recorder_event>()
-        );
-        return 1;
+fn process(backend: impl Backend, opts: &Options) -> Result<()> {
+    let rdesc = parse_report_descriptor(&backend, &opts)?;
+    if !opts.only_describe {
+        Outfile::new().separator();
+        Outfile::new().write_comment("Recorded events below in format:");
+        Outfile::new().write_comment("E: <seconds>.<microseconds> <length-in-bytes> [bytes ...]");
+        Outfile::new().write_comment("");
+        backend.read_events(opts.bpf, &rdesc)?;
     }
-
-    let event = unsafe { &*(data.as_ptr() as *const hid_recorder_event) };
-
-    if event.length == 0 {
-        return 1;
-    }
-
-    let elapsed = start_time.get().unwrap().elapsed();
-
-    let size = if event.packet_number == event.packet_count - 1 {
-        event.length as usize - event.packet_number as usize * PACKET_SIZE
-    } else {
-        PACKET_SIZE
-    };
-
-    if event.packet_number == 0 {
-        buffer.clear();
-    }
-
-    buffer.extend_from_slice(&event.data[..size]);
-
-    if event.packet_number == event.packet_count - 1 {
-        let bytes = buffer
-            .iter()
-            .fold("".to_string(), |acc, b| format!("{acc}{b:02x} "));
-        cprintln!(
-            Styles::Bpf,
-            "B: {:06}.{:06} {} {}",
-            elapsed.as_secs(),
-            elapsed.as_micros() % 1000000,
-            buffer.len(),
-            bytes,
-        );
-    }
-    0
-}
-
-enum HidBpfSkel {
-    None,
-    StructOps(Box<HidrecordSkel<'static>>),
-    Tracing(Box<HidrecordTracingSkel<'static>>, u32),
-}
-
-fn print_to_log(level: libbpf_rs::PrintLevel, msg: String) {
-    /* we strip out the 3 following lines that happen when the kernel
-     * doesn't support HID-BPF struct_ops
-     */
-    let ignore_msgs = [
-        "struct bpf_struct_ops_hid_bpf_ops is not found in kernel BTF",
-        "failed to load object 'hidrecord_bpf'",
-        "failed to load BPF skeleton 'hidrecord_bpf': -2",
-    ];
-    if ignore_msgs.iter().any(|ignore| msg.contains(ignore)) {
-        return;
-    }
-    match level {
-        libbpf_rs::PrintLevel::Info => cprintln!(Styles::Bpf, "{}", msg.trim()),
-        libbpf_rs::PrintLevel::Warn => cprintln!(Styles::Note, "{}", msg.trim()),
-        _ => (),
-    }
-}
-
-fn preload_bpf_tracer(use_bpf: BpfOption, path: &Path) -> Result<HidBpfSkel> {
-    let sysfs = find_sysfs_path(path)?.canonicalize()?;
-    let hid_id = u32::from_str_radix(
-        sysfs
-            .extension()
-            .unwrap()
-            .to_str()
-            .expect("not a hex value"),
-        16,
-    )
-    .unwrap();
-
-    let sysfs_name = sysfs
-        .file_name()
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .replace([':', '.'], "_");
-
-    let bpffs = PathBuf::from("/sys/fs/bpf/hid/").join(sysfs_name);
-
-    let enable_bpf = match use_bpf {
-        BpfOption::Never => false,
-        BpfOption::Always => true,
-        BpfOption::Auto => bpffs.exists(),
-    };
-
-    if !enable_bpf {
-        return Ok(HidBpfSkel::None);
-    }
-
-    libbpf_rs::set_print(Some((libbpf_rs::PrintLevel::Info, print_to_log)));
-
-    let skel_builder = HidrecordSkelBuilder::default();
-    let mut open_skel = skel_builder.open().unwrap();
-    let hid_record_update = open_skel.struct_ops.hid_record_mut();
-    hid_record_update.hid_id = hid_id as i32;
-
-    if let Ok(skel) = open_skel.load() {
-        return Ok(HidBpfSkel::StructOps(Box::new(skel)));
-    }
-
-    let skel_builder = HidrecordTracingSkelBuilder::default();
-    let skel = skel_builder.open()?.load()?;
-    Ok(HidBpfSkel::Tracing(Box::new(skel), hid_id))
-}
-
-fn run_syscall_prog_generic<T>(prog: &libbpf_rs::Program, data: T) -> Result<T, BpfError> {
-    let fd = prog.as_fd().as_raw_fd();
-    let data_ptr: *const libc::c_void = &data as *const _ as *const libc::c_void;
-    let mut run_opts = libbpf_sys::bpf_test_run_opts {
-        sz: std::mem::size_of::<libbpf_sys::bpf_test_run_opts>()
-            .try_into()
-            .unwrap(),
-        ctx_in: data_ptr,
-        ctx_size_in: std::mem::size_of::<T>() as u32,
-        ..Default::default()
-    };
-
-    let run_opts_ptr: *mut libbpf_sys::bpf_test_run_opts = &mut run_opts;
-
-    match unsafe { libbpf_sys::bpf_prog_test_run_opts(fd, run_opts_ptr) } {
-        0 => Ok(data),
-        e => Err(BpfError::OsError { errno: -e as u32 }),
-    }
-}
-
-fn run_syscall_prog_attach(
-    prog: &libbpf_rs::Program,
-    attach_args: attach_prog_args,
-) -> Result<i32, BpfError> {
-    let args = run_syscall_prog_generic(prog, attach_args)?;
-    if args.retval < 0 {
-        Err(BpfError::OsError {
-            errno: -args.retval as u32,
-        })
-    } else {
-        Ok(args.retval)
-    }
+    Ok(())
 }
 
 fn hid_recorder() -> Result<()> {
@@ -1447,34 +1275,43 @@ fn hid_recorder() -> Result<()> {
         Some(path) => path,
         None => find_device()?,
     };
+    let path = path.as_path();
+    let input_format = if path.starts_with("/sys") || path.starts_with("/dev") {
+        InputFormat::Hidraw
+    } else {
+        cli.input_format
+    };
 
-    let rdesc_file = find_rdesc(&path)?;
-    let opts = Options { full: cli.full };
-
-    let rdesc = parse(&rdesc_file, &opts)?;
-    if !cli.only_describe && path.starts_with("/dev") {
-        match preload_bpf_tracer(cli.bpf, &path)? {
-            HidBpfSkel::None => read_events(&path, &rdesc, None)?,
-            HidBpfSkel::StructOps(skel) => {
-                let maps = skel.maps();
-                // We need to keep _link around or the program gets immediately removed
-                let _link = maps.hid_record().attach_struct_ops()?;
-                read_events(&path, &rdesc, Some(maps.events()))?
-            }
-            HidBpfSkel::Tracing(skel, hid_id) => {
-                let attach_args = attach_prog_args {
-                    prog_fd: skel.progs().hid_record_event().as_fd().as_raw_fd(),
-                    hid: hid_id,
-                    retval: -1,
-                };
-
-                let _link =
-                    run_syscall_prog_attach(skel.progs().attach_prog(), attach_args).unwrap();
-                read_events(&path, &rdesc, Some(skel.maps().events()))?
+    let opts = Options {
+        full: cli.full,
+        only_describe: cli.only_describe,
+        bpf: cli.bpf,
+    };
+    match input_format {
+        InputFormat::Hidraw => {
+            let backend = hidraw::HidrawBackend::try_from(path)?;
+            process(backend, &opts)
+        }
+        InputFormat::LibinputRecording => {
+            let backend = libinput::LibinputRecordingBackend::try_from(path)?;
+            process(backend, &opts)
+        }
+        InputFormat::HidRecording => {
+            let backend = hidrecording::HidRecorderBackend::try_from(path)?;
+            process(backend, &opts)
+        }
+        InputFormat::Auto => {
+            if let Ok(backend) = hidraw::HidrawBackend::try_from(path) {
+                process(backend, &opts)
+            } else if let Ok(backend) = libinput::LibinputRecordingBackend::try_from(path) {
+                process(backend, &opts)
+            } else if let Ok(backend) = hidrecording::HidRecorderBackend::try_from(path) {
+                process(backend, &opts)
+            } else {
+                bail!("Unrecognized file format");
             }
         }
     }
-    Ok(())
 }
 
 fn main() -> ExitCode {
@@ -1501,7 +1338,7 @@ mod tests {
             .filter(|name| name.starts_with("hidraw"))
             .collect();
         for hidraw in hidraws.iter().map(|h| PathBuf::from("/dev/").join(h)) {
-            let result = find_rdesc(&hidraw);
+            let result = hidraw::HidrawBackend::try_from(hidraw.as_path());
             assert!(result.is_ok());
         }
     }
@@ -1523,7 +1360,7 @@ mod tests {
             assert!(evdevs
                 .iter()
                 .map(|n| PathBuf::from("/dev/input").join(n))
-                .any(|evdev| find_rdesc(&evdev).is_ok()));
+                .any(|evdev| hidraw::HidrawBackend::try_from(evdev.as_path()).is_ok()));
         }
     }
 
@@ -1537,14 +1374,22 @@ mod tests {
             .flat_map(|f| f.file_name().into_string())
             .filter(|name| name.starts_with("hidraw"))
             .collect();
-        for rdesc_file in hidraws
+        for (path, backend) in hidraws
             .iter()
             .map(|h| PathBuf::from("/dev/").join(h))
-            .map(|path| find_rdesc(&path).unwrap())
+            .map(|path| {
+                (
+                    path.clone(),
+                    hidraw::HidrawBackend::try_from(path.as_path()).unwrap(),
+                )
+            })
         {
-            let opts = Options { full: true };
-            parse(&rdesc_file, &opts)
-                .unwrap_or_else(|_| panic!("Failed to parse {:?}", rdesc_file.path));
+            let opts = Options {
+                full: true,
+                ..Default::default()
+            };
+            parse_report_descriptor(&backend, &opts)
+                .unwrap_or_else(|_| panic!("Failed to parse {:?}", path));
         }
     }
 }
