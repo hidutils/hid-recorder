@@ -336,10 +336,10 @@ fn print_to_log(level: libbpf_rs::PrintLevel, msg: String) {
     }
     match level {
         libbpf_rs::PrintLevel::Info => {
-            Outfile::new().writeln(&Styles::Bpf, format!("{}", msg.trim()).as_str())
+            Outfile::new().writeln(&Styles::Bpf, format!("# {}", msg.trim()).as_str())
         }
         libbpf_rs::PrintLevel::Warn => {
-            Outfile::new().writeln(&Styles::Note, format!("{}", msg.trim()).as_str())
+            Outfile::new().writeln(&Styles::Note, format!("# {}", msg.trim()).as_str())
         }
         _ => (),
     }
