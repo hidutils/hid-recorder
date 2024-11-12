@@ -463,7 +463,7 @@ fn fmt_main_item(item: &MainItem) -> String {
 
 fn fmt_global_item(item: &GlobalItem) -> String {
     match item {
-        GlobalItem::UsagePage { usage_page } => {
+        GlobalItem::UsagePage(usage_page) => {
             let upval = u16::from(usage_page);
             let up = hut::UsagePage::try_from(upval);
             let str = match up {
@@ -473,8 +473,8 @@ fn fmt_global_item(item: &GlobalItem) -> String {
 
             format!("Usage Page ({str})")
         }
-        GlobalItem::LogicalMinimum { minimum } => format!("Logical Minimum ({minimum})"),
-        GlobalItem::LogicalMaximum { maximum } => {
+        GlobalItem::LogicalMinimum(minimum) => format!("Logical Minimum ({minimum})"),
+        GlobalItem::LogicalMaximum(maximum) => {
             // Special case -1 as maximum. It's common enough and never means -1 but
             // we can only know this is we check the minimum for signed-ness.
             let maximum: i32 = maximum.into();
@@ -484,10 +484,10 @@ fn fmt_global_item(item: &GlobalItem) -> String {
                 format!("Logical Maximum ({maximum})")
             }
         }
-        GlobalItem::PhysicalMinimum { minimum } => format!("Physical Minimum ({minimum})"),
-        GlobalItem::PhysicalMaximum { maximum } => format!("Physical Maximum ({maximum})"),
-        GlobalItem::UnitExponent { exponent } => format!("Unit Exponent ({})", exponent.exponent()),
-        GlobalItem::Unit { unit } => format!(
+        GlobalItem::PhysicalMinimum(minimum) => format!("Physical Minimum ({minimum})"),
+        GlobalItem::PhysicalMaximum(maximum) => format!("Physical Maximum ({maximum})"),
+        GlobalItem::UnitExponent(exponent) => format!("Unit Exponent ({})", exponent.exponent()),
+        GlobalItem::Unit(unit) => format!(
             "Unit ({:?}{}{unit})",
             unit.system(),
             match unit.system() {
@@ -495,9 +495,9 @@ fn fmt_global_item(item: &GlobalItem) -> String {
                 _ => ": ",
             }
         ),
-        GlobalItem::ReportSize { size } => format!("Report Size ({size})"),
-        GlobalItem::ReportId { id } => format!("Report ID ({id})"),
-        GlobalItem::ReportCount { count } => format!("Report Count ({count})"),
+        GlobalItem::ReportSize(size) => format!("Report Size ({size})"),
+        GlobalItem::ReportId(id) => format!("Report ID ({id})"),
+        GlobalItem::ReportCount(count) => format!("Report Count ({count})"),
         GlobalItem::Push => "Push".into(),
         GlobalItem::Pop => "Pop".into(),
         GlobalItem::Reserved => "Reserved".into(),
@@ -506,19 +506,12 @@ fn fmt_global_item(item: &GlobalItem) -> String {
 
 fn fmt_local_item(item: &LocalItem, global_usage_page: &UsagePage) -> String {
     match item {
-        LocalItem::Usage {
-            usage_page,
-            usage_id,
-        } => {
-            let up: &UsagePage = match usage_page {
-                Some(up) => up,
-                None => global_usage_page,
-            };
-            let hut = hut::UsagePage::try_from(u16::from(up));
+        LocalItem::Usage(usage_page, usage_id) => {
+            let hut = hut::UsagePage::try_from(u16::from(usage_page));
             let str = match hut {
                 Ok(hut) => {
                     let uidval = u16::from(usage_id);
-                    let u = hut.to_usage(uidval);
+                    let u = hut.to_usage_from_value(uidval);
                     match u {
                         Ok(u) => format!("{u}"),
                         Err(_) => format!("0x{uidval:04X}"),
@@ -528,15 +521,30 @@ fn fmt_local_item(item: &LocalItem, global_usage_page: &UsagePage) -> String {
             };
             format!("Usage ({str})")
         }
-        LocalItem::UsageMinimum { minimum } => format!("UsageMinimum ({minimum})"),
-        LocalItem::UsageMaximum { maximum } => format!("UsageMaximum ({maximum})"),
-        LocalItem::DesignatorIndex { index } => format!("DesignatorIndex ({index})"),
-        LocalItem::DesignatorMinimum { minimum } => format!("DesignatorMinimum ({minimum})"),
-        LocalItem::DesignatorMaximum { maximum } => format!("DesignatorMaximum ({maximum})"),
-        LocalItem::StringIndex { index } => format!("StringIndex ({index})"),
-        LocalItem::StringMinimum { minimum } => format!("StringMinimum ({minimum})"),
-        LocalItem::StringMaximum { maximum } => format!("StringMaximum ({maximum})"),
-        LocalItem::Delimiter { delimiter } => format!("Delimiter ({delimiter})"),
+        LocalItem::UsageId(usage_id) => {
+            let hut = hut::UsagePage::try_from(u16::from(global_usage_page));
+            let str = match hut {
+                Ok(hut) => {
+                    let uidval = u16::from(usage_id);
+                    let u = hut.to_usage_from_value(uidval);
+                    match u {
+                        Ok(u) => format!("{u}"),
+                        Err(_) => format!("0x{uidval:04X}"),
+                    }
+                }
+                Err(_) => format!("0x{:04x}", u16::from(usage_id)),
+            };
+            format!("Usage ({str})")
+        }
+        LocalItem::UsageMinimum(minimum) => format!("UsageMinimum ({minimum})"),
+        LocalItem::UsageMaximum(maximum) => format!("UsageMaximum ({maximum})"),
+        LocalItem::DesignatorIndex(index) => format!("DesignatorIndex ({index})"),
+        LocalItem::DesignatorMinimum(minimum) => format!("DesignatorMinimum ({minimum})"),
+        LocalItem::DesignatorMaximum(maximum) => format!("DesignatorMaximum ({maximum})"),
+        LocalItem::StringIndex(index) => format!("StringIndex ({index})"),
+        LocalItem::StringMinimum(minimum) => format!("StringMinimum ({minimum})"),
+        LocalItem::StringMaximum(maximum) => format!("StringMaximum ({maximum})"),
+        LocalItem::Delimiter(delimiter) => format!("Delimiter ({delimiter})"),
         LocalItem::Reserved { value } => format!("Reserved ({value})"),
     }
 }
@@ -572,7 +580,7 @@ fn print_rdesc_items(bytes: &[u8]) -> Result<()> {
 
         match item.item_type() {
             ItemType::Main(MainItem::Collection(_)) => indent += 2,
-            ItemType::Global(GlobalItem::UsagePage { usage_page }) => {
+            ItemType::Global(GlobalItem::UsagePage(usage_page)) => {
                 current_usage_page = usage_page;
             }
             _ => {}
@@ -1054,10 +1062,10 @@ fn print_field_values(bytes: &[u8], field: &Field) -> String {
             let hutstr = get_hut_str(&var.usage);
             if var.bits.len() <= 32 {
                 if var.is_signed() {
-                    let v = var.extract_i32(bytes).unwrap();
+                    let v: i32 = var.extract(bytes).unwrap().into();
                     format!("{}: {:5}", hutstr, v)
                 } else {
-                    let v = var.extract_u32(bytes).unwrap();
+                    let v: u32 = var.extract(bytes).unwrap().into();
                     format!("{}: {:5}", hutstr, v)
                 }
             } else {
@@ -1076,7 +1084,7 @@ fn print_field_values(bytes: &[u8], field: &Field) -> String {
         }
         Field::Array(arr) => {
             // The values in the array are usage values between usage min/max
-            let vs = arr.extract_u32(bytes).unwrap();
+            let vs: Vec<u32> = arr.extract(bytes).unwrap().iter().map(u32::from).collect();
             if arr.usages().len() > 1 {
                 let usage_range = arr.usage_range();
 
