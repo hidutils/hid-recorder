@@ -35,6 +35,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo fmt --check
 
+  clippy:
+    name: cargo clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install dependencies on ubuntu
+        run: |
+          sudo apt-get update
+          sudo apt-get install libelf-dev
+      - run: cargo clippy --no-deps
+
   release-build:
      name: cargo build --release
      runs-on: ubuntu-22.04
