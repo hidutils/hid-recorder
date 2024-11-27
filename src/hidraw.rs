@@ -252,13 +252,13 @@ impl Backend for HidrawBackend {
             return Ok(());
         }
         let path = self.device_path.as_ref().unwrap();
-        match preload_bpf_tracer(use_bpf, &path)? {
-            HidBpfSkel::None => self.read_events_loop(&path, rdesc, None)?,
+        match preload_bpf_tracer(use_bpf, path)? {
+            HidBpfSkel::None => self.read_events_loop(path, rdesc, None)?,
             HidBpfSkel::StructOps(skel) => {
                 let maps = skel.maps();
                 // We need to keep _link around or the program gets immediately removed
                 let _link = maps.hid_record().attach_struct_ops()?;
-                self.read_events_loop(&path, rdesc, Some(maps.events()))?
+                self.read_events_loop(path, rdesc, Some(maps.events()))?
             }
             HidBpfSkel::Tracing(skel, hid_id) => {
                 let attach_args = attach_prog_args {
@@ -269,7 +269,7 @@ impl Backend for HidrawBackend {
 
                 let _link =
                     run_syscall_prog_attach(skel.progs().attach_prog(), attach_args).unwrap();
-                self.read_events_loop(&path, rdesc, Some(skel.maps().events()))?
+                self.read_events_loop(path, rdesc, Some(skel.maps().events()))?
             }
         }
         Ok(())
@@ -311,7 +311,7 @@ fn bpf_event_handler(
     buffer.extend_from_slice(&event.data[..size]);
 
     if event.packet_number == event.packet_count - 1 {
-        print_bpf_input_report_data(&buffer, &elapsed);
+        print_bpf_input_report_data(buffer, &elapsed);
     }
     0
 }

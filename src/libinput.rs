@@ -48,7 +48,7 @@ impl TryFrom<&Path> for LibinputRecordingBackend {
         let device = devices
             .as_vec()
             .context("Malformed libinput recording - devices isn't a list")?
-            .get(0)
+            .first()
             .context("Malformed libinput recording - no devices")?
             .as_hash()
             .context("Malformed libinput recording - device not an object")?;
@@ -91,7 +91,7 @@ impl TryFrom<&Path> for LibinputRecordingBackend {
             .collect::<Result<Vec<u32>, anyhow::Error>>()?;
 
         let bustype = *ids
-            .get(0)
+            .first()
             .context("Malformed libinput recording - missing bustype")?;
         let vid = *ids
             .get(1)
