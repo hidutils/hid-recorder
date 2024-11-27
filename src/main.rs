@@ -50,6 +50,12 @@ pub enum Outfile {
     File(&'static mut std::sync::Mutex<std::cell::RefCell<std::io::LineWriter<std::fs::File>>>),
 }
 
+impl Default for Outfile {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Outfile {
     pub fn new() -> Self {
         unsafe {
@@ -175,7 +181,7 @@ impl Outfile {
     ) {
         self.report_comment_prefix(report_id);
         for (style, msg) in components {
-            Outfile::new().write(style, format!("{}", msg).as_ref());
+            Outfile::new().write(style, msg.to_string().as_ref());
         }
         self.writeln(&Styles::None, "");
     }
@@ -186,7 +192,7 @@ impl Outfile {
     }
 
     pub fn write_name(&mut self, name: &str) {
-        self.write_data(Prefix::Name, format!("{name}").as_str());
+        self.write_data(Prefix::Name, name.to_string().as_str());
     }
     pub fn write_id(&mut self, bustype: u32, vid: u32, pid: u32) {
         self.write_data(Prefix::Id, format!("{bustype:x} {vid:x} {pid:x}").as_str());
@@ -210,7 +216,7 @@ impl Outfile {
             &Styles::Timestamp,
             format!(
                 "# Current time: {}",
-                chrono::prelude::Local::now().format("%H:%M:%S").to_string()
+                chrono::prelude::Local::now().format("%H:%M:%S")
             )
             .as_ref(),
         )
@@ -1000,17 +1006,17 @@ fn parse_report_descriptor(backend: &impl Backend, opts: &Options) -> Result<Rep
     let (bustype, vid, pid) = (backend.bustype(), backend.vid(), backend.pid());
     let bytes = backend.rdesc();
 
-    Outfile::new().write_comment(format!("{name}").as_str());
+    Outfile::new().write_comment(name.to_string().as_str());
     Outfile::new()
         .write_comment(format!("Report descriptor length: {} bytes", bytes.len()).as_str());
-    print_rdesc_items(&bytes)?;
+    print_rdesc_items(bytes)?;
 
     // Print the readable fields
     Outfile::new().write_report_descriptor(bytes);
     Outfile::new().write_name(name);
     Outfile::new().write_id(bustype, vid, pid);
 
-    let rdesc = ReportDescriptor::try_from(&bytes as &[u8])?;
+    let rdesc = ReportDescriptor::try_from(bytes as &[u8])?;
     Outfile::new().write_comment("Report descriptor:");
     let input_reports = rdesc.input_reports();
     if !input_reports.is_empty() {
@@ -1263,7 +1269,7 @@ fn find_device() -> Result<PathBuf> {
 }
 
 fn process(backend: impl Backend, opts: &Options) -> Result<()> {
-    let rdesc = parse_report_descriptor(&backend, &opts)?;
+    let rdesc = parse_report_descriptor(&backend, opts)?;
     if !opts.only_describe {
         Outfile::new().separator();
         Outfile::new().write_comment("Recorded events below in format:");

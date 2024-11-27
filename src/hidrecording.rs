@@ -75,7 +75,7 @@ impl TryFrom<&Path> for HidRecorderBackend {
                         .split(' ')
                         .map(|s| u16::from_str_radix(s, 16))
                         .collect::<Result<Vec<u16>, _>>()?;
-                    bustype = Some(*v.get(0).context("Missing bustype")?);
+                    bustype = Some(*v.first().context("Missing bustype")?);
                     vid = Some(*v.get(1).context("Missing vid")?);
                     pid = Some(*v.get(2).context("Missing pid")?);
                 }
