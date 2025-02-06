@@ -573,8 +573,11 @@ fn print_rdesc_items(bytes: &[u8]) -> Result<()> {
     for rdesc_item in rdesc_items.iter() {
         let item = rdesc_item.item();
         let offset = rdesc_item.offset();
-        if let ItemType::Main(MainItem::EndCollection) = item.item_type() {
-            indent -= 2;
+        match item.item_type() {
+            ItemType::Main(MainItem::EndCollection) | ItemType::Global(GlobalItem::Pop) => {
+                indent -= 2;
+            }
+            _ => {}
         }
         Outfile::new().write_item_comment(
             item.item_type(),
@@ -586,6 +589,9 @@ fn print_rdesc_items(bytes: &[u8]) -> Result<()> {
 
         match item.item_type() {
             ItemType::Main(MainItem::Collection(_)) => indent += 2,
+            ItemType::Global(GlobalItem::Push) => {
+                indent += 2;
+            }
             ItemType::Global(GlobalItem::UsagePage(usage_page)) => {
                 current_usage_page = usage_page;
             }
