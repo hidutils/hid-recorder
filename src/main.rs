@@ -580,7 +580,7 @@ fn fmt_item(item: &impl Item, usage_page: &UsagePage) -> String {
 fn print_rdesc_items(bytes: &[u8]) -> Result<()> {
     let rdesc_items = ReportDescriptorItems::try_from(bytes)?;
     let mut indent = 0;
-    let mut current_usage_page = UsagePage::from(0u16); // Undefined
+    let mut usage_pages = vec![UsagePage::from(0u16)]; // Undefined
 
     // Print the device description
     for rdesc_item in rdesc_items.iter() {
@@ -594,7 +594,7 @@ fn print_rdesc_items(bytes: &[u8]) -> Result<()> {
         }
         Outfile::new().write_item_comment(
             item.item_type(),
-            fmt_item(item, &current_usage_page).as_ref(),
+            fmt_item(item, usage_pages.first().unwrap()).as_ref(),
             item.bytes(),
             indent,
             offset,
@@ -603,10 +603,16 @@ fn print_rdesc_items(bytes: &[u8]) -> Result<()> {
         match item.item_type() {
             ItemType::Main(MainItem::Collection(_)) => indent += 2,
             ItemType::Global(GlobalItem::Push) => {
+                let up = usage_pages.first().unwrap();
+                usage_pages.insert(0, *up);
                 indent += 2;
             }
+            ItemType::Global(GlobalItem::Pop) => {
+                usage_pages.remove(0);
+            }
             ItemType::Global(GlobalItem::UsagePage(usage_page)) => {
-                current_usage_page = usage_page;
+                usage_pages.remove(0);
+                usage_pages.insert(0, usage_page);
             }
             _ => {}
         }
