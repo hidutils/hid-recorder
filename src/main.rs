@@ -132,6 +132,11 @@ impl Outfile {
             ItemType::Main(MainItem::Output(..)) => Styles::OutputItem,
             ItemType::Main(MainItem::Feature(..)) => Styles::FeatureItem,
             ItemType::Global(GlobalItem::ReportId { .. }) => Styles::ReportId,
+            ItemType::Global(GlobalItem::UsagePage { .. }) => Styles::UsagePage,
+            ItemType::Local(LocalItem::Usage { .. }) => Styles::Usage,
+            ItemType::Local(LocalItem::UsageId { .. }) => Styles::Usage,
+            ItemType::Local(LocalItem::UsageMinimum { .. }) => Styles::Usage,
+            ItemType::Local(LocalItem::UsageMaximum { .. }) => Styles::Usage,
             _ => Styles::None,
         };
 
@@ -275,6 +280,8 @@ pub enum Styles {
         report_id: ReportId,
     },
     Bpf,
+    Usage,
+    UsagePage,
 }
 
 impl From<&Styles> for Style {
@@ -299,6 +306,8 @@ impl From<&Styles> for Style {
                 6 => Rgb(0xe5, 0xc4, 0x94),
                 _ => Rgb(0x66, 0xc2, 0xa5),
             }),
+            Styles::Usage => Style::new().bold(),
+            Styles::UsagePage => Style::new().bold(),
         }
     }
 }
@@ -325,6 +334,8 @@ impl Styles {
                 6 => "▃",
                 _ => "▘",
             },
+            Styles::Usage => "🭬",
+            Styles::UsagePage => "🮥",
         }
     }
 }
