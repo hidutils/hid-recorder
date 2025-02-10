@@ -59,6 +59,7 @@ impl Default for Outfile {
 impl Outfile {
     pub fn new() -> Self {
         unsafe {
+            #[allow(static_mut_refs)]
             match OUTFILE.get_mut() {
                 None => Outfile::Stdout,
                 Some(o) => Outfile::File(o),
@@ -76,6 +77,7 @@ impl Outfile {
         if cli.output_file != "-" {
             let out = std::fs::File::create(cli.output_file.clone()).unwrap();
             let _ = unsafe {
+                #[allow(static_mut_refs)]
                 OUTFILE.set(std::sync::Mutex::new(std::cell::RefCell::new(
                     std::io::LineWriter::new(out),
                 )))
