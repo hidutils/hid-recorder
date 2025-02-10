@@ -14,7 +14,7 @@ repos:
   - id: cargo-check
   - id: clippy
 - repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.8.0
+  rev: v0.9.6
   hooks:
     - id: ruff
       args: ['--ignore=E741,E501']
