@@ -135,7 +135,7 @@ impl HidrawBackend {
                 let has_events: Vec<bool> = pollfds
                     .iter()
                     .map(|fd| fd.revents())
-                    .map(|revents| revents.map_or(false, |flag| flag.intersects(PollFlags::POLLIN)))
+                    .map(|revents| revents.is_some_and(|flag| flag.intersects(PollFlags::POLLIN)))
                     .collect();
 
                 if has_events[0] {
