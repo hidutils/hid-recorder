@@ -555,14 +555,14 @@ fn fmt_local_item(item: &LocalItem, global_usage_page: &UsagePage) -> String {
             };
             format!("Usage ({str})")
         }
-        LocalItem::UsageMinimum(minimum) => format!("UsageMinimum ({minimum})"),
-        LocalItem::UsageMaximum(maximum) => format!("UsageMaximum ({maximum})"),
-        LocalItem::DesignatorIndex(index) => format!("DesignatorIndex ({index})"),
-        LocalItem::DesignatorMinimum(minimum) => format!("DesignatorMinimum ({minimum})"),
-        LocalItem::DesignatorMaximum(maximum) => format!("DesignatorMaximum ({maximum})"),
-        LocalItem::StringIndex(index) => format!("StringIndex ({index})"),
-        LocalItem::StringMinimum(minimum) => format!("StringMinimum ({minimum})"),
-        LocalItem::StringMaximum(maximum) => format!("StringMaximum ({maximum})"),
+        LocalItem::UsageMinimum(minimum) => format!("Usage Minimum ({minimum})"),
+        LocalItem::UsageMaximum(maximum) => format!("Usage Maximum ({maximum})"),
+        LocalItem::DesignatorIndex(index) => format!("Designator Index ({index})"),
+        LocalItem::DesignatorMinimum(minimum) => format!("Designator Minimum ({minimum})"),
+        LocalItem::DesignatorMaximum(maximum) => format!("Designator Maximum ({maximum})"),
+        LocalItem::StringIndex(index) => format!("String Index ({index})"),
+        LocalItem::StringMinimum(minimum) => format!("String Minimum ({minimum})"),
+        LocalItem::StringMaximum(maximum) => format!("String Maximum ({maximum})"),
         LocalItem::Delimiter(delimiter) => format!("Delimiter ({delimiter})"),
         LocalItem::Reserved { value } => format!("Reserved ({value})"),
     }
