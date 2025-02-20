@@ -69,10 +69,12 @@ impl Outfile {
 
     fn init(cli: &Cli) -> Result<()> {
         // Bit lame but easier to just set the env for owo_colors to figure out the rest
-        match cli.color {
-            ColorChoice::Never => std::env::set_var("NO_COLOR", "1"),
-            ColorChoice::Auto => {}
-            ColorChoice::Always => std::env::set_var("FORCE_COLOR", "1"),
+        unsafe {
+            match cli.color {
+                ColorChoice::Never => std::env::set_var("NO_COLOR", "1"),
+                ColorChoice::Auto => {}
+                ColorChoice::Always => std::env::set_var("FORCE_COLOR", "1"),
+            }
         }
         if cli.output_file != "-" {
             let out = std::fs::File::create(cli.output_file.clone()).unwrap();
