@@ -584,6 +584,11 @@ fn print_rdesc_items(bytes: &[u8]) -> Result<()> {
     let mut indent = 0;
     let mut usage_pages = vec![UsagePage::from(0u16)]; // Undefined
 
+    let header =
+        "#   Bytes                          // Field Name                              Offset";
+    let separator = format!("# {0:-<1$}", "-", header.len() - 2);
+    Outfile::new().writeln(&Styles::None, header);
+    Outfile::new().writeln(&Styles::None, &separator);
     // Print the device description
     for rdesc_item in rdesc_items.iter() {
         let item = rdesc_item.item();
