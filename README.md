@@ -12,7 +12,7 @@ This is a Rust reimplementation of hid-recorder from
 A pre-built binary is available for our
 [releases](https://github.com/hidutils/hid-recorder/releases). Simply download the
 `hid-recorder.zip`, unpack it and you are good to go:
-```
+```console
 $ unzip hid-recorder.zip
 $ chmod +x hid-recorder
 $ sudo ./hid-recorder
@@ -22,7 +22,7 @@ $ sudo ./hid-recorder
 
 The easiest is to install with cargo:
 
-```
+```console
 $ cargo install hid-recorder
 $ hid-recorder
 ```
@@ -36,7 +36,7 @@ needs read access to the respective `/dev/hidraw` device. Typically this
 means you need to run as root. The easiest way is to run through `pkexec`
 which will ask for your user's password:
 
-```
+```console
 $ pkexec hid-recorder
 ```
 
@@ -50,7 +50,7 @@ sudo:
 This is the default `cargo` installation but requires that you add the
 path manually when running hid-recorder:
 
-```
+```console
 $ cargo install hid-recorder
 $ sudo $HOME/.cargo/bin/hid-recorder
 ```
@@ -60,7 +60,7 @@ $ sudo $HOME/.cargo/bin/hid-recorder
 Install hid-recorder in `/usr/local/` which is typically part of the
 default `$PATH`.
 
-```
+```console
 $ sudo CARGO_INSTALL_ROOT=/usr/local cargo install hid-recorder
 $ sudo hid-recorder
 ```
@@ -71,7 +71,7 @@ This is the least safe option as once read access is granted, any
 process can read events from the device. If the device is a keyboard
 this allows for key loggers to read all events.
 
-```
+```console
 $ cargo install hid-recorder
 $ sudo chmod o+r /dev/hidraw0
 $ hid-recorder
@@ -79,7 +79,7 @@ $ hid-recorder
 It is recommended to remove these permissions once the recording is
 complete:
 
-```
+```console
 $ sudo chmod o-r /dev/hidraw0
 ```
 
@@ -89,7 +89,7 @@ The typical use is a request for "attach a hid recording" in an issue.
 To do this, run hid-recorder with no arguments and pick the device
 in question, e.g.
 
-```
+```console
 $ sudo hid-recorder
 # Available devices:
 # /dev/hidraw0:     Microsoft Microsoft® 2.4GHz Transceiver v9.0
@@ -106,7 +106,7 @@ $ sudo hid-recorder
 ```
 
 Alternatively provide the `/dev/hidraw` path directly:
-```
+```console
 $ sudo hid-recorder /dev/hidraw0
 ```
 
