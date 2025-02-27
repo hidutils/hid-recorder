@@ -1242,6 +1242,7 @@ pub fn print_input_report_data(
 }
 
 pub fn print_bpf_input_report_data(bytes: &[u8], elapsed: &Duration) {
+    let len = bytes.len();
     let bytes = bytes
         .iter()
         .fold("".to_string(), |acc, b| format!("{acc}{b:02x} "));
@@ -1251,7 +1252,7 @@ pub fn print_bpf_input_report_data(bytes: &[u8], elapsed: &Duration) {
             "{:06}.{:06} {} {}",
             elapsed.as_secs(),
             elapsed.as_micros() % 1000000,
-            bytes.len(),
+            len,
             bytes,
         )
         .as_ref(),
