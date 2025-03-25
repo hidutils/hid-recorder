@@ -372,6 +372,19 @@ fn preload_bpf_tracer(use_bpf: BpfOption, path: &Path) -> Result<HidBpfSkel> {
         BpfOption::Auto => bpffs.exists(),
     };
 
+    if bpffs.exists() {
+        if let Ok(readdir) = std::fs::read_dir(bpffs) {
+            let bpfs = readdir
+                .flatten()
+                .map(|e| String::from(e.file_name().to_string_lossy()))
+                .collect::<Vec<String>>();
+            Outfile::new().writeln(
+                &Styles::None,
+                &format!("# BPF programs active: {}", bpfs.join(", ")),
+            );
+        }
+    }
+
     if !enable_bpf {
         return Ok(HidBpfSkel::None);
     }
