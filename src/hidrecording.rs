@@ -6,7 +6,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::{
-    print_input_report_data, print_input_report_description, Backend, BpfOption, ReportDescriptor,
+    print_input_report_data, print_input_report_description, Backend, BpfOption, EventNode,
+    ReportDescriptor,
 };
 
 // FIXME: add a enum to differ between hid events and bpf events
@@ -140,6 +141,10 @@ impl Backend for HidRecorderBackend {
 
     fn rdesc(&self) -> &[u8] {
         &self.rdesc
+    }
+
+    fn event_nodes(&self) -> &[EventNode] {
+        &[]
     }
 
     fn read_events(&self, _use_bpf: BpfOption, rdesc: &ReportDescriptor) -> Result<()> {
