@@ -12,8 +12,8 @@ use std::time::Instant;
 
 use crate::{
     find_sysfs_path, parse_uevent, print_bpf_input_report_data, print_current_time,
-    print_input_report_data, print_input_report_description, Backend, BpfOption, Outfile,
-    ReportDescriptor, Styles,
+    print_input_report_data, print_input_report_description, Backend, BpfOption, EventNode,
+    Outfile, ReportDescriptor, Styles,
 };
 
 use libbpf_rs::libbpf_sys;
@@ -92,6 +92,7 @@ pub struct HidrawBackend {
     pid: u32,
     rdesc: Vec<u8>,
     device_path: Option<PathBuf>,
+    event_nodes: Vec<EventNode>,
 }
 
 impl HidrawBackend {
@@ -212,6 +213,36 @@ impl TryFrom<&Path> for HidrawBackend {
                 None
             };
 
+            let mut event_nodes: Vec<EventNode> = Vec::new();
+            if let Some(path) = &device_path {
+                let hidraw = path.file_name().unwrap().to_string_lossy().to_string();
+                let sysfs: PathBuf = PathBuf::from("/sys/class/hidraw/")
+                    .join(hidraw)
+                    .join("device/input");
+
+                if let Ok(readdir) = std::fs::read_dir(sysfs) {
+                    for dir in readdir
+                        .filter_map(|entry| entry.ok())
+                        .filter(|entry| entry.file_name().to_string_lossy().starts_with("input"))
+                    {
+                        let name =
+                            std::fs::read_to_string(dir.path().join("name")).unwrap_or("".into());
+                        let name = name.trim_end();
+
+                        if let Ok(readdir) = std::fs::read_dir(dir.path()) {
+                            for event in readdir.filter_map(|entry| entry.ok()).filter(|entry| {
+                                entry.file_name().to_string_lossy().starts_with("event")
+                            }) {
+                                event_nodes.push(EventNode {
+                                    name: name.into(),
+                                    path: PathBuf::from("/dev/input").join(event.file_name()),
+                                });
+                            }
+                        }
+                    }
+                }
+            };
+
             Ok(HidrawBackend {
                 name,
                 bustype,
@@ -219,6 +250,7 @@ impl TryFrom<&Path> for HidrawBackend {
                 pid,
                 rdesc: bytes,
                 device_path,
+                event_nodes,
             })
         } else {
             bail!("Not a syfs file or hidraw node");
@@ -245,6 +277,10 @@ impl Backend for HidrawBackend {
 
     fn rdesc(&self) -> &[u8] {
         &self.rdesc
+    }
+
+    fn event_nodes(&self) -> &[EventNode] {
+        &self.event_nodes
     }
 
     fn read_events(&self, use_bpf: BpfOption, rdesc: &ReportDescriptor) -> Result<()> {

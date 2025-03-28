@@ -259,12 +259,28 @@ impl Write for Outfile {
     }
 }
 
+pub struct EventNode {
+    name: String,
+    path: PathBuf,
+}
+
+impl EventNode {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
 trait Backend {
     fn name(&self) -> &str;
     fn bustype(&self) -> u32;
     fn vid(&self) -> u32;
     fn pid(&self) -> u32;
     fn rdesc(&self) -> &[u8];
+    fn event_nodes(&self) -> &[EventNode];
     fn read_events(&self, use_bpf: BpfOption, rdesc: &ReportDescriptor) -> Result<()>;
 }
 
@@ -286,6 +302,7 @@ pub enum Styles {
     Bpf,
     Usage,
     UsagePage,
+    EventNodes,
 }
 
 impl From<&Styles> for Style {
@@ -312,6 +329,7 @@ impl From<&Styles> for Style {
             }),
             Styles::Usage => Style::new().bold(),
             Styles::UsagePage => Style::new().bold(),
+            Styles::EventNodes => Style::new(),
         }
     }
 }
@@ -340,6 +358,7 @@ impl Styles {
             },
             Styles::Usage => "🭬",
             Styles::UsagePage => "🮥",
+            Styles::EventNodes => " ",
         }
     }
 }
@@ -1071,6 +1090,22 @@ fn parse_report_descriptor(backend: &impl Backend, opts: &Options) -> Result<Rep
             Outfile::new()
                 .write_comment_styled(Styles::FeatureItem, "------- Feature Report ------- ");
             print_report_summary(r, opts);
+        }
+    }
+
+    let nodes = backend.event_nodes();
+    if !nodes.is_empty() {
+        Outfile::new().separator();
+        Outfile::new().write_comment_styled(Styles::EventNodes, "Event nodes:");
+        for node in backend.event_nodes() {
+            Outfile::new().write_comment_styled(
+                Styles::EventNodes,
+                &format!(
+                    "- {:19} \"{}\"",
+                    format!("{}:", node.path().to_string_lossy()),
+                    node.name()
+                ),
+            );
         }
     }
 

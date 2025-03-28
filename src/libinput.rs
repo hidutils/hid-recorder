@@ -8,7 +8,8 @@ use std::time::Duration;
 use yaml_rust2::{Yaml, YamlLoader};
 
 use crate::{
-    print_input_report_data, print_input_report_description, Backend, BpfOption, ReportDescriptor,
+    print_input_report_data, print_input_report_description, Backend, BpfOption, EventNode,
+    ReportDescriptor,
 };
 
 #[derive(Debug)]
@@ -178,6 +179,10 @@ impl Backend for LibinputRecordingBackend {
 
     fn rdesc(&self) -> &[u8] {
         &self.rdesc
+    }
+
+    fn event_nodes(&self) -> &[EventNode] {
+        &[]
     }
 
     fn read_events(&self, _use_bpf: BpfOption, rdesc: &ReportDescriptor) -> Result<()> {
