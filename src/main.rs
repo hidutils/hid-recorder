@@ -365,6 +365,7 @@ impl Styles {
 
 const MAX_USAGES_DISPLAYED: usize = 5;
 
+mod binary;
 mod hidraw;
 mod hidrecording;
 mod libinput;
@@ -375,6 +376,7 @@ enum InputFormat {
     Hidraw,
     LibinputRecording,
     HidRecording,
+    Binary,
 }
 
 #[derive(Parser, Debug)]
@@ -1382,12 +1384,18 @@ fn hid_recorder() -> Result<()> {
             let backend = hidrecording::HidRecorderBackend::try_from(path)?;
             process(backend, &opts)
         }
+        InputFormat::Binary => {
+            let backend = hidrecording::HidRecorderBackend::try_from(path)?;
+            process(backend, &opts)
+        }
         InputFormat::Auto => {
             if let Ok(backend) = hidraw::HidrawBackend::try_from(path) {
                 process(backend, &opts)
             } else if let Ok(backend) = libinput::LibinputRecordingBackend::try_from(path) {
                 process(backend, &opts)
             } else if let Ok(backend) = hidrecording::HidRecorderBackend::try_from(path) {
+                process(backend, &opts)
+            } else if let Ok(backend) = binary::BinaryBackend::try_from(path) {
                 process(backend, &opts)
             } else {
                 bail!("Unrecognized file format");
