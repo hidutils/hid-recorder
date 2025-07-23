@@ -20,12 +20,12 @@ fn main() {
         println!("cargo:rustc-env=SKELFILE_TRACING=bpf/hidrecord_tracing.default.skel.rs");
         return;
     }
-    println!("cargo:rerun-if-changed={}", SRC);
+    println!("cargo:rerun-if-changed={SRC}");
     SkeletonBuilder::new()
         .source(SRC_TRACING)
         .build_and_generate(&out_tracing)
         .expect("bpf compilation failed");
-    println!("cargo:rerun-if-changed={}", SRC_TRACING);
+    println!("cargo:rerun-if-changed={SRC_TRACING}");
     println!("cargo:rerun-if-changed=src/bpf/hidrecord.h");
     println!("cargo:rustc-env=SKELFILE={}", out.to_str().unwrap());
     println!(
