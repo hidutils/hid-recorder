@@ -45,7 +45,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install libelf-dev
-      - run: cargo clippy --no-deps
+      - run: cargo clippy --no-deps -- -D warnings
 
   release-build:
      name: cargo build --release
