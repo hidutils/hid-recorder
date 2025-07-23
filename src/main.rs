@@ -596,7 +596,7 @@ fn fmt_item(item: &impl Item, usage_page: &UsagePage) -> String {
         ItemType::Main(mi) => fmt_main_item(&mi),
         ItemType::Global(gi) => fmt_global_item(&gi),
         ItemType::Local(li) => fmt_local_item(&li, usage_page),
-        i => format!("{:?}", i),
+        i => format!("{i:?}"),
     }
 }
 
@@ -904,7 +904,7 @@ fn repeat_usage_filler(count: usize) -> PrintableRow {
 /// Print the parsed reports as an outline of how they look like
 fn print_report_summary(r: &impl Report, opts: &Options) {
     if let Some(report_id) = r.report_id() {
-        Outfile::new().report_comment(r.report_id(), format!("Report ID: {}", report_id).as_str());
+        Outfile::new().report_comment(r.report_id(), format!("Report ID: {report_id}").as_str());
     }
     Outfile::new().report_comment(
         r.report_id(),
@@ -1138,10 +1138,10 @@ fn print_field_values(bytes: &[u8], field: &Field) -> String {
             if var.bits.len() <= 32 {
                 if var.is_signed() {
                     let v: i32 = var.extract(bytes).unwrap().into();
-                    format!("{}: {:5}", hutstr, v)
+                    format!("{hutstr}: {v:5}")
                 } else {
                     let v: u32 = var.extract(bytes).unwrap().into();
-                    format!("{}: {:5}", hutstr, v)
+                    format!("{hutstr}: {v:5}")
                 }
             } else {
                 // FIXME: output is not correct if start/end doesn't align with byte
@@ -1177,7 +1177,7 @@ fn print_field_values(bytes: &[u8], field: &Field) -> String {
                         // Usage within range?
                         if let Some(usage) = usage_range.lookup_usage(&usage) {
                             let hutstr = get_hut_str(usage);
-                            format!("{}: {:5}", hutstr, v)
+                            format!("{hutstr}: {v:5}")
                         } else {
                             // Let's just print the value as-is
                             format!("{v:02x}")
@@ -1319,7 +1319,7 @@ fn find_device() -> Result<PathBuf> {
     hidraws.sort_by(|a, b| human_sort::compare(a, b));
 
     for file in hidraws {
-        let uevent_path = PathBuf::from(format!("/sys/class/hidraw/{}/device/", file));
+        let uevent_path = PathBuf::from(format!("/sys/class/hidraw/{file}/device/"));
         let (name, _) = parse_uevent(&uevent_path)?;
         let devnode = format!("/dev/{file}:");
         eprintln!("# {devnode:14}    {name}");
@@ -1479,7 +1479,7 @@ mod tests {
                 ..Default::default()
             };
             parse_report_descriptor(&backend, &opts)
-                .unwrap_or_else(|_| panic!("Failed to parse {:?}", path));
+                .unwrap_or_else(|_| panic!("Failed to parse {path:?}"));
         }
     }
 }
