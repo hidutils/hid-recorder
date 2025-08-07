@@ -101,11 +101,16 @@ impl TryFrom<&Path> for LibinputRecordingBackend {
             .get(2)
             .context("Malformed libinput recording - missing pid")?;
 
-        let evlist = device
+        let events = device
             .get(&Yaml::String("events".into()))
-            .context("Not a libinput recording - events element missing")?
-            .as_vec()
-            .context("Malformed libinput recording - events not an array")?;
+            .context("Not a libinput recording - events element missing")?;
+
+        // if we get to this point we know it's a libinput recording. If
+        // no events exist the recording ends with events: which isn't a valid
+        // vec. We paper over this by assuming any non-array events is an empty
+        // array. Good enough.
+        let empty = vec![];
+        let evlist = events.as_vec().unwrap_or(&empty);
 
         // The key isn't fixed, might be hidraw1, hidraw2, ...
         // We only care about the first one found and only search
@@ -186,6 +191,9 @@ impl Backend for LibinputRecordingBackend {
     }
 
     fn read_events(&self, _use_bpf: BpfOption, rdesc: &ReportDescriptor) -> Result<()> {
+        if self.events.is_empty() {
+            println!("# No events found in this recording");
+        }
         for e in self.events.iter() {
             let elapsed = Duration::from_micros(e.usecs);
             print_input_report_description(&e.bytes, rdesc)?;
