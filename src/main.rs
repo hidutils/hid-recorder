@@ -1385,7 +1385,7 @@ fn hid_recorder() -> Result<()> {
             process(backend, &opts)
         }
         InputFormat::Binary => {
-            let backend = hidrecording::HidRecorderBackend::try_from(path)?;
+            let backend = binary::BinaryBackend::try_from(path)?;
             process(backend, &opts)
         }
         InputFormat::Auto => {
