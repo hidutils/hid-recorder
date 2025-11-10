@@ -26,3 +26,6 @@ hex = "0.4.3"
 
 [build-dependencies]
 libbpf-cargo = "0.23"
+
+[dev-dependencies]
+tempfile = "3.8"
