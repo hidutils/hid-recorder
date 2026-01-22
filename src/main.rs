@@ -1162,9 +1162,11 @@ fn print_field_values(bytes: &[u8], field: &Field) -> String {
         Field::Array(arr) => {
             // The values in the array are usage values between usage min/max
             let vs: Vec<u32> = arr.extract(bytes).unwrap().iter().map(u32::from).collect();
-            if arr.usages().len() > 1 {
-                let usage_range = arr.usage_range();
 
+            // An array field can have a single usage (unlikely), multiple defined
+            // usages (common for system buttons) or a min/max usage range (buttons/keys).
+            // Let's handle the usage range first
+            if let Some(usage_range) = arr.usage_range() {
                 vs.iter()
                     .map(|v| {
                         // Does the value have a usage page?
@@ -1182,6 +1184,35 @@ fn print_field_values(bytes: &[u8], field: &Field) -> String {
                             format!("{hutstr}: {v:5}")
                         } else {
                             // Let's just print the value as-is
+                            format!("{v:02x}")
+                        }
+                    })
+                    .collect::<Vec<String>>()
+                    .join("| ")
+            // Discrete set of usages
+            } else if arr.usages().len() > 1 {
+                vs.iter()
+                    .map(|v| {
+                        // Example report from a Logitech Ergo K860
+                        // ------- Input Report -------
+                        //  Report ID: 4
+                        //   | Report size: 16 bits
+                        //  Bits:   8..=9   Usages:                                                Logical Range:     1..=3
+                        //                  0001/0082: Generic Desktop / System Sleep
+                        //                  0001/0081: Generic Desktop / System Power Down
+                        //                  0001/0083: Generic Desktop / System Wake Up
+                        //  Bits:  10..=15  ######### Padding
+                        //
+                        // So the values we get is the 1-based index in the usages, or
+                        // at least we hope so. Could do a LogicalMinimum check here but meh?
+                        if *v == 0 {
+                            format!("{v:02x}")
+                        } else if let Some(usage) = arr.usages().get((*v - 1) as usize) {
+                            let hutstr = get_hut_str(usage);
+                            format!("{hutstr}: {v:5}")
+                        } else {
+                            // This shouldn't really ever happen but if it does, let's print
+                            // the value as-is.
                             format!("{v:02x}")
                         }
                     })
@@ -1488,6 +1519,251 @@ mod tests {
             };
             parse_report_descriptor(&backend, &opts)
                 .unwrap_or_else(|_| panic!("Failed to parse {path:?}"));
+        }
+    }
+
+    mod print_field_values_tests {
+        use super::*;
+        use hidreport::hid::{CollectionItem, ItemBuilder, ReportDescriptorBuilder};
+
+        #[test]
+        fn test_constant_field() {
+            let rdesc_bytes = ReportDescriptorBuilder::new()
+                .usage_page(hut::UsagePage::GenericDesktop)
+                .usage_id(hut::GenericDesktop::Mouse)
+                .open_collection(CollectionItem::Application)
+                .usage_page(hut::UsagePage::Button)
+                .append(UsageMinimum::from(1).into())
+                .append(UsageMaximum::from(3).into())
+                .append(LogicalMinimum::from(0).into())
+                .append(LogicalMaximum::from(1).into())
+                .append(ReportCount::from(3).into())
+                .append(ReportSize::from(1).into())
+                .input(ItemBuilder::new().data().variable().absolute().input())
+                .append(ReportCount::from(1).into())
+                .append(ReportSize::from(5).into())
+                .input(ItemBuilder::new().constant().array().absolute().input())
+                .close_collection()
+                .build();
+
+            let rdesc = ReportDescriptor::try_from(rdesc_bytes.as_slice()).unwrap();
+            let reports = rdesc.input_reports();
+            assert_eq!(reports.len(), 1);
+
+            let report = &reports[0];
+            let fields: Vec<&Field> = report.fields().iter().collect();
+
+            // Find the constant field (padding) - it should be the last field
+            let constant_field = fields
+                .iter()
+                .find(|f| matches!(f, Field::Constant(_)))
+                .unwrap();
+            let bytes = &[0x00];
+            let result = print_field_values(bytes, constant_field);
+
+            assert_eq!(result, "<5 bits padding>");
+        }
+
+        #[test]
+        fn test_variable_field_unsigned() {
+            let rdesc_bytes = ReportDescriptorBuilder::new()
+                .usage_page(hut::UsagePage::GenericDesktop)
+                .usage_id(hut::GenericDesktop::Mouse)
+                .open_collection(CollectionItem::Application)
+                .usage_id(hut::GenericDesktop::X)
+                .append(LogicalMinimum::from(0).into())
+                .append(LogicalMaximum::from(127).into())
+                .append(ReportSize::from(8).into())
+                .append(ReportCount::from(1).into())
+                .input(ItemBuilder::new().data().variable().absolute().input())
+                .close_collection()
+                .build();
+
+            let rdesc = ReportDescriptor::try_from(rdesc_bytes.as_slice()).unwrap();
+            let reports = rdesc.input_reports();
+            let report = &reports[0];
+            let field = &report.fields()[0];
+
+            let bytes = &[0x42]; // Value: 66
+            let result = print_field_values(bytes, field);
+
+            assert_eq!(result, "X:    66");
+        }
+
+        #[test]
+        fn test_variable_field_signed() {
+            let rdesc_bytes = ReportDescriptorBuilder::new()
+                .usage_page(hut::UsagePage::GenericDesktop)
+                .usage_id(hut::GenericDesktop::Mouse)
+                .open_collection(CollectionItem::Application)
+                .usage_id(hut::GenericDesktop::X)
+                .append(LogicalMinimum::from(-127).into())
+                .append(LogicalMaximum::from(127).into())
+                .append(ReportSize::from(8).into())
+                .append(ReportCount::from(1).into())
+                .input(ItemBuilder::new().data().variable().relative().input())
+                .close_collection()
+                .build();
+
+            let rdesc = ReportDescriptor::try_from(rdesc_bytes.as_slice()).unwrap();
+            let reports = rdesc.input_reports();
+            let report = &reports[0];
+            let field = &report.fields()[0];
+
+            let bytes = &[0xFE]; // Value: -2
+            let result = print_field_values(bytes, field);
+
+            assert_eq!(result, "X:    -2");
+        }
+
+        #[test]
+        fn test_variable_field_large() {
+            let rdesc_bytes = ReportDescriptorBuilder::new()
+                .usage_page(hut::UsagePage::GenericDesktop)
+                .usage_id(hut::GenericDesktop::Mouse)
+                .open_collection(CollectionItem::Application)
+                .usage_id(hut::GenericDesktop::X)
+                .append(LogicalMinimum::from(0).into())
+                .append(LogicalMaximum::from(0xffffffffu32 as i32).into())
+                .append(ReportSize::from(64).into())
+                .append(ReportCount::from(1).into())
+                .input(ItemBuilder::new().data().variable().absolute().input())
+                .close_collection()
+                .build();
+
+            let rdesc = ReportDescriptor::try_from(rdesc_bytes.as_slice()).unwrap();
+            let reports = rdesc.input_reports();
+            let report = &reports[0];
+            let field = &report.fields()[0];
+
+            let bytes = &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
+            let result = print_field_values(bytes, field);
+
+            assert_eq!(result, "X: 01 02 03 04 05 06 07 08");
+        }
+
+        #[test]
+        fn test_array_field_with_usage_range() {
+            let rdesc_bytes = ReportDescriptorBuilder::new()
+                .usage_page(hut::UsagePage::GenericDesktop)
+                .usage_id(hut::GenericDesktop::Keyboard)
+                .open_collection(CollectionItem::Application)
+                .usage_page(hut::UsagePage::KeyboardKeypad)
+                .append(UsageMinimum::from(0x04).into()) // 'a'
+                .append(UsageMaximum::from(0x06).into()) // 'c'
+                .append(LogicalMinimum::from(0).into())
+                .append(LogicalMaximum::from(101).into())
+                .append(ReportSize::from(8).into())
+                .append(ReportCount::from(2).into())
+                .input(ItemBuilder::new().data().array().absolute().input())
+                .close_collection()
+                .build();
+
+            let rdesc = ReportDescriptor::try_from(rdesc_bytes.as_slice()).unwrap();
+            let reports = rdesc.input_reports();
+            let report = &reports[0];
+            let field = &report.fields()[0];
+
+            // Simulate pressing 'a' (0x04) and 'b' (0x05)
+            let bytes = &[0x04, 0x05];
+            let result = print_field_values(bytes, field);
+
+            assert_eq!(result, "Keyboard A:     4| Keyboard B:     5");
+        }
+
+        #[test]
+        fn test_array_field_with_discrete_usages() {
+            let rdesc_bytes = ReportDescriptorBuilder::new()
+                .usage_page(hut::UsagePage::GenericDesktop)
+                .usage_id(hut::GenericDesktop::SystemControl)
+                .open_collection(CollectionItem::Application)
+                .usage_page(hut::UsagePage::GenericDesktop)
+                .usage_id(hut::GenericDesktop::SystemPowerDown)
+                .usage_id(hut::GenericDesktop::SystemSleep)
+                .usage_id(hut::GenericDesktop::SystemWakeUp)
+                .append(LogicalMinimum::from(1).into())
+                .append(LogicalMaximum::from(3).into())
+                .append(ReportCount::from(1).into())
+                .append(ReportSize::from(2).into())
+                .input(ItemBuilder::new().data().array().absolute().input())
+                .append(ReportSize::from(6).into())
+                .append(ReportCount::from(1).into())
+                .input(ItemBuilder::new().constant().array().absolute().input())
+                .close_collection()
+                .build();
+
+            let rdesc = ReportDescriptor::try_from(rdesc_bytes.as_slice()).unwrap();
+            let reports = rdesc.input_reports();
+            let report = &reports[0];
+            let field = &report.fields()[0];
+
+            // Select second button (System Sleep) - value is 1-based index
+            let bytes = &[0x02];
+            let result = print_field_values(bytes, field);
+            assert_eq!(result, "System Sleep:     2");
+
+            // Ensure we handle zero correctly
+            let bytes = &[0x00];
+            let result = print_field_values(bytes, field);
+
+            assert_eq!(result, "00");
+        }
+
+        #[test]
+        fn test_array_field_zero_value() {
+            let rdesc_bytes = ReportDescriptorBuilder::new()
+                .usage_page(hut::UsagePage::GenericDesktop)
+                .usage_id(hut::GenericDesktop::SystemControl)
+                .open_collection(CollectionItem::Application)
+                .usage_page(hut::UsagePage::GenericDesktop)
+                .usage_id(hut::GenericDesktop::SystemPowerDown)
+                .usage_id(hut::GenericDesktop::SystemSleep)
+                .append(LogicalMinimum::from(0).into())
+                .append(LogicalMaximum::from(2).into())
+                .append(ReportCount::from(1).into())
+                .append(ReportSize::from(8).into())
+                .input(ItemBuilder::new().data().array().absolute().input())
+                .close_collection()
+                .build();
+
+            let rdesc = ReportDescriptor::try_from(rdesc_bytes.as_slice()).unwrap();
+            let reports = rdesc.input_reports();
+            let report = &reports[0];
+            let field = &report.fields()[0];
+
+            let bytes = &[0x00]; // No button pressed
+            let result = print_field_values(bytes, field);
+
+            assert_eq!(result, "00");
+        }
+
+        #[test]
+        fn test_variable_field_multiple_bits() {
+            let rdesc_bytes = ReportDescriptorBuilder::new()
+                .usage_page(hut::UsagePage::Button)
+                .usage_id(hut::Button::Button(1))
+                .open_collection(CollectionItem::Application)
+                .usage_id(hut::Button::Button(1))
+                .append(LogicalMinimum::from(0).into())
+                .append(LogicalMaximum::from(1).into())
+                .append(ReportSize::from(1).into())
+                .append(ReportCount::from(1).into())
+                .input(ItemBuilder::new().data().variable().absolute().input())
+                .append(ReportSize::from(7).into())
+                .append(ReportCount::from(1).into())
+                .input(ItemBuilder::new().constant().array().absolute().input())
+                .close_collection()
+                .build();
+
+            let rdesc = ReportDescriptor::try_from(rdesc_bytes.as_slice()).unwrap();
+            let reports = rdesc.input_reports();
+            let report = &reports[0];
+            let field = &report.fields()[0];
+
+            let bytes = &[0x01]; // Button pressed
+            let result = print_field_values(bytes, field);
+
+            assert_eq!(result, "Button 1:     1");
         }
     }
 }
